@@ -1,0 +1,8 @@
+[package]
+name = "tfrecord-rs"
+version = "0.1.0"
+authors = ["jerry73204 <jerry73204@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+protobuf = { version = "2", features = ["with-bytes"] }
