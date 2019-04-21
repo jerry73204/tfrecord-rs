@@ -6,3 +6,5 @@ edition = "2018"
 
 [dependencies]
 protobuf = { version = "2", features = ["with-bytes"] }
+crc = "1.8.1"
+byteorder = "1"
