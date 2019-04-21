@@ -229,6 +229,26 @@ impl From<(&path::Path, bool)> for SequentialRecordLoader<fs::File>
 }
 
 
+impl From<path::PathBuf> for SequentialRecordLoader<fs::File>
+{
+    fn from(path: path::PathBuf) -> SequentialRecordLoader<fs::File>
+    {
+        let reader = fs::File::open(path).unwrap();
+        SequentialRecordLoader::from(reader)
+    }
+}
+
+impl From<(path::PathBuf, bool)> for SequentialRecordLoader<fs::File>
+{
+    fn from(read_option: (path::PathBuf, bool)) -> SequentialRecordLoader<fs::File>
+    {
+        let (path, check_integrity) = read_option;
+        let reader = fs::File::open(path).unwrap();
+        SequentialRecordLoader::from((reader, check_integrity))
+    }
+}
+
+
 // Random access loader
 
 pub struct RandomAccessRecordLoader<R: io::Read>
@@ -325,6 +345,25 @@ impl From<&path::Path> for RandomAccessRecordLoader<fs::File>
 impl From<(&path::Path, bool)> for RandomAccessRecordLoader<fs::File>
 {
     fn from(read_option: (&path::Path, bool)) -> RandomAccessRecordLoader<fs::File>
+    {
+        let (path, check_integrity) = read_option;
+        let reader = fs::File::open(path).unwrap();
+        RandomAccessRecordLoader::from((reader, check_integrity))
+    }
+}
+
+impl From<path::PathBuf> for RandomAccessRecordLoader<fs::File>
+{
+    fn from(path: path::PathBuf) -> RandomAccessRecordLoader<fs::File>
+    {
+        let reader = fs::File::open(path).unwrap();
+        RandomAccessRecordLoader::from(reader)
+    }
+}
+
+impl From<(path::PathBuf, bool)> for RandomAccessRecordLoader<fs::File>
+{
+    fn from(read_option: (path::PathBuf, bool)) -> RandomAccessRecordLoader<fs::File>
     {
         let (path, check_integrity) = read_option;
         let reader = fs::File::open(path).unwrap();
@@ -433,6 +472,25 @@ impl From<&path::Path> for MmapRecordLoader
 impl From<(&path::Path, bool)> for MmapRecordLoader
 {
     fn from(read_option: (&path::Path, bool)) -> MmapRecordLoader
+    {
+        let (path, check_integrity) = read_option;
+        let file = fs::File::open(path).unwrap();
+        MmapRecordLoader::from((file, check_integrity))
+    }
+}
+
+impl From<path::PathBuf> for MmapRecordLoader
+{
+    fn from(path: path::PathBuf) -> MmapRecordLoader
+    {
+        let file = fs::File::open(path).unwrap();
+        MmapRecordLoader::from(file)
+    }
+}
+
+impl From<(path::PathBuf, bool)> for MmapRecordLoader
+{
+    fn from(read_option: (path::PathBuf, bool)) -> MmapRecordLoader
     {
         let (path, check_integrity) = read_option;
         let file = fs::File::open(path).unwrap();
