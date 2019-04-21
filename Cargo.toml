@@ -8,3 +8,4 @@ edition = "2018"
 protobuf = { version = "2", features = ["with-bytes"] }
 crc = "1.8.1"
 byteorder = "1"
+memmap = "0.6.2"

@@ -1,5 +1,6 @@
 extern crate protobuf;
 extern crate crc;
+extern crate memmap;
 
 mod from_tf;
 pub mod loader;
