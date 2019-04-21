@@ -2,6 +2,7 @@ extern crate protobuf;
 extern crate crc;
 
 mod from_tf;
+pub mod loader;
 
 use std::error;
 use std::path;
