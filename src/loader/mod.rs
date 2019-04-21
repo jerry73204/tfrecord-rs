@@ -27,13 +27,14 @@ fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>,
             if check_integrity
             {
                 let answer_cksum = reader.read_u32::<LittleEndian>()?;
-                if answer_cksum == checksum(&len_buf)
+                let len_cksum = checksum(&len_buf);
+                if answer_cksum == len_cksum
                 {
                     Ok(Some(len))
                 }
                 else
                 {
-                    Err(Box::new(make_corrupted_error()))
+                    Err(Box::new(make_corrupted_error(answer_cksum, len_cksum)))
                 }
             }
             else
@@ -56,9 +57,12 @@ fn try_read_record<R>(reader: &mut R, len: usize, check_integrity: bool) -> Resu
     reader.read_exact(&mut buf)?;
     let answer_cksum = reader.read_u32::<LittleEndian>()?;
 
-    if check_integrity && answer_cksum != checksum(&buf.as_slice())
+    if check_integrity
     {
-        return Err(Box::new(make_corrupted_error()));
+        let record_cksum = checksum(&buf);
+        if answer_cksum != record_cksum {
+            return Err(Box::new(make_corrupted_error(answer_cksum, record_cksum)));
+        }
     }
 
     Ok(buf)
@@ -82,10 +86,11 @@ pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Resu
                     buf.resize(len as usize, 0);
                     reader.read_exact(&mut buf)?;
                     let answer_cksum = reader.read_u32::<LittleEndian>()?;
+                    let record_cksum = checksum(&buf);
 
-                    if check_integrity && answer_cksum != checksum(&buf)
+                    if answer_cksum != record_cksum
                     {
-                        return Err(Box::new(make_corrupted_error()));
+                        return Err(Box::new(make_corrupted_error(answer_cksum, record_cksum)));
                     }
                 }
                 else
@@ -112,17 +117,18 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
     while offset < limit
     {
         let mut len_buf = &buf[offset..(offset + len_size)];
-        let len = len_buf.read_u64::<LittleEndian>()? as usize;
+        let len = (&len_buf[..]).read_u64::<LittleEndian>()? as usize;
         offset += len_size;
 
         if check_integrity
         {
             let mut cksum_buf = &buf[offset..(offset + cksum_size)];
-            let len_cksum = cksum_buf.read_u32::<LittleEndian>()?;
-            let answer_cksum = checksum(len_buf);
+            let answer_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
+            let len_cksum = checksum(len_buf);
+
             if answer_cksum != len_cksum
             {
-                return Err(Box::new(make_corrupted_error()));
+                return Err(Box::new(make_corrupted_error(answer_cksum, len_cksum)));
             }
         }
         offset += cksum_size;
@@ -131,15 +137,15 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
 
         if check_integrity
         {
-            let mut record_buf = &buf[offset..(offset + len)];
-            let answer_cksum = record_buf.read_u32::<LittleEndian>()?;
+            let record_buf = &buf[offset..(offset + len)];
+            let record_cksum = checksum(record_buf);
 
-            let mut cksum_buf = &buf[(offset + len)..(offset + len + cksum_size)];
-            let record_cksum = cksum_buf.read_u32::<LittleEndian>()?;
+            let cksum_buf = &buf[(offset + len)..(offset + len + cksum_size)];
+            let answer_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
 
             if answer_cksum != record_cksum
             {
-                return Err(Box::new(make_corrupted_error()));
+                return Err(Box::new(make_corrupted_error(answer_cksum, record_cksum)));
             }
         }
         offset += len + cksum_size;
@@ -150,9 +156,9 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
     Ok(index)
 }
 
-fn make_corrupted_error() -> io::Error
+fn make_corrupted_error(expect_cksum: u32, true_cksum: u32) -> io::Error
 {
-    io::Error::new(io::ErrorKind::Other, "Corrupted record")
+    io::Error::new(io::ErrorKind::Other, format!("Corrupted record: expect checksum {}, but get {}", expect_cksum, true_cksum))
 }
 
 fn make_truncated_error() -> io::Error
