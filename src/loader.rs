@@ -2,6 +2,7 @@ use std::io;
 use std::io::Seek;
 use std::io::Read;
 use std::iter;
+use std::marker;
 use std::slice;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
@@ -14,6 +15,8 @@ use std::ops;
 use crc::crc32;
 use byteorder::{ReadBytesExt, LittleEndian};
 use rayon::prelude::*;
+use crate::iter::DsIterator;
+use crate::error::{make_checksum_error,make_truncated_error};
 
 // Helper functions
 
@@ -43,7 +46,7 @@ fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>,
                 }
                 else
                 {
-                    Err(make_corrupted_error(answer_cksum, len_cksum))
+                    Err(make_checksum_error(answer_cksum, len_cksum))
                 }
             }
             else
@@ -71,7 +74,7 @@ fn try_read_record<R>(reader: &mut R, len: usize, check_integrity: bool) -> Resu
         let record_cksum = checksum(&buf);
         if answer_cksum != record_cksum
         {
-            return Err(make_corrupted_error(answer_cksum, record_cksum));
+            return Err(make_checksum_error(answer_cksum, record_cksum));
         }
     }
 
@@ -139,7 +142,7 @@ pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Resu
 
                     if answer_cksum != record_cksum
                     {
-                        return Err(make_corrupted_error(answer_cksum, record_cksum));
+                        return Err(make_checksum_error(answer_cksum, record_cksum));
                     }
                 }
                 else
@@ -177,7 +180,7 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
 
             if answer_cksum != len_cksum
             {
-                return Err(make_corrupted_error(answer_cksum, len_cksum));
+                return Err(make_checksum_error(answer_cksum, len_cksum));
             }
         }
         offset += cksum_size;
@@ -194,7 +197,7 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
 
             if answer_cksum != record_cksum
             {
-                return Err(make_corrupted_error(answer_cksum, record_cksum));
+                return Err(make_checksum_error(answer_cksum, record_cksum));
             }
         }
         offset += len + cksum_size;
@@ -203,16 +206,6 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
     }
 
     Ok(index)
-}
-
-fn make_corrupted_error(expect_cksum: u32, true_cksum: u32) -> io::Error
-{
-    io::Error::new(io::ErrorKind::Other, format!("Corrupted record: expect checksum {}, but get {}", expect_cksum, true_cksum))
-}
-
-fn make_truncated_error() -> io::Error
-{
-    io::Error::new(io::ErrorKind::UnexpectedEof, "Truncated record")
 }
 
 // traits
@@ -227,15 +220,13 @@ pub trait Loader<A, L, E>: Sized where
     fn load_ex(_: A, _: LoaderOptions) -> Result<L, E>;
 }
 
-pub trait Indexer<I, R>
-{
-    fn get_indexes(&self) -> &[I];
-    fn fetch(&mut self, index: I) -> Option<R>;
-}
+// Type aliases
+
+pub type RecordIndex = (usize, usize);
 
 // structs
 
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub enum LoaderMethod
 {
     Mmap, File,
@@ -251,6 +242,7 @@ pub struct LoaderOptions
     pub open_limit: Option<usize>,
     pub method: LoaderMethod,
 }
+
 enum FileList
 {
     MmapLru(lru::LruCache<Arc<PathBuf>, memmap::Mmap>),
@@ -263,9 +255,21 @@ enum FileList
 
 pub struct TFRecordLoader
 {
-    indexes: Vec<(usize, usize)>,
-    record_indexes: Vec<(Arc<PathBuf>, Vec<(usize, usize)>)>,
+    indexes: Vec<RecordIndex>,
+    record_indexes: Vec<(Arc<PathBuf>, Vec<RecordIndex>)>,
     file_list: FileList,
+}
+
+pub struct IndexIter
+{
+    cursor: usize,
+    indexes: Vec<RecordIndex>,
+}
+
+pub struct RecordIter
+{
+    loader: TFRecordLoader,
+    cursor: usize,
 }
 
 
@@ -287,114 +291,30 @@ impl Default for LoaderOptions
 }
 
 
-
-impl Loader<&str, TFRecordLoader, io::Error> for TFRecordLoader
+impl TFRecordLoader
 {
-    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    pub fn index_iter(&self) -> IndexIter
     {
-        TFRecordLoader::load_ex(path_str.to_owned(), options)
-    }
-}
-
-impl Loader<String, TFRecordLoader, io::Error> for TFRecordLoader
-{
-    fn load_ex(path_str: String, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
-    {
-        let meta = fs::metadata(&path_str).unwrap();
-        if meta.is_dir()
-        {
-            let paths: Vec<_> = fs::read_dir(&path_str)
-                .unwrap()
-                .filter_map(|entry_ret| {
-                    let entry = entry_ret.unwrap();
-                    let meta = entry.metadata().unwrap();
-                    let fname = entry.file_name().into_string().unwrap();
-
-                    if meta.is_file() && fname.ends_with(".tfrecord")
-                    {
-                        Some(entry.path())
-                    }
-                    else
-                    {
-                        None
-                    }
-
-                }).collect();
-            TFRecordLoader::load_ex(paths, options)
-        }
-        else if meta.is_file()
-        {
-            let path = PathBuf::from(path_str);
-            let path_list = vec![path];
-            TFRecordLoader::load_ex(path_list, options)
-        }
-        else
-        {
-            panic!("{} is not a file or directory", path_str);
+        IndexIter {
+            cursor: 0,
+            indexes: self.indexes.clone()
         }
     }
-}
 
-impl Loader<&[&Path], TFRecordLoader, io::Error> for TFRecordLoader
-{
-    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    pub fn into_record_iter(self) -> RecordIter
     {
-        let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
-        TFRecordLoader::load_ex(cloned_paths, options)
-    }
-}
-
-impl Loader<Vec<PathBuf>, TFRecordLoader, io::Error> for TFRecordLoader
-{
-    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
-    {
-        let record_indexes = build_indexes_from_paths(paths, options.check_integrity, options.parallel).unwrap();
-
-        let file_list = match options.method {
-            LoaderMethod::Mmap => {
-                match options.open_limit {
-                    None => FileList::MmapMap(HashMap::new()),
-                    Some(0) => FileList::MmapOnDemand,
-                    Some(limit) => FileList::MmapLru(lru::LruCache::new(limit)),
-                }
-            }
-            LoaderMethod::File => {
-                match options.open_limit {
-                    None => FileList::FileMap(HashMap::new()),
-                    Some(0) => FileList::FileOnDemand,
-                    Some(limit) => FileList::FileLru(lru::LruCache::new(limit)),
-                }
-            }
-        };
-
-        let mut indexes = Vec::<(usize, usize)>::new();
-
-        for (outer_ind, (_, file_index)) in record_indexes.iter().enumerate()
-        {
-            for inner_ind in 0..(file_index.len())
-            {
-                indexes.push((outer_ind, inner_ind));
-            }
+        RecordIter {
+            cursor: 0,
+            loader: self,
         }
-
-        Ok(
-            TFRecordLoader {
-                record_indexes,
-                indexes: indexes,
-                file_list,
-            }
-        )
     }
-}
 
-impl Indexer<(usize, usize), Vec<u8>> for TFRecordLoader
-{
-    fn get_indexes(&self) -> &[(usize, usize)]
+    pub fn get_indexes(&self) -> &[RecordIndex]
     {
         &self.indexes
     }
 
-    fn fetch(&mut self, index: (usize, usize)) -> Option<Vec<u8>>
+    pub fn fetch(&mut self, index: RecordIndex) -> Option<Vec<u8>>
     {
         let (outer_ind, inner_ind) = index;
         let (path_rc, file_index) = self.record_indexes.get(outer_ind)?;
@@ -487,4 +407,148 @@ impl Indexer<(usize, usize), Vec<u8>> for TFRecordLoader
         }
     }
 }
+
+
+impl Loader<&str, TFRecordLoader, io::Error> for TFRecordLoader
+{
+    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    {
+        TFRecordLoader::load_ex(path_str.to_owned(), options)
+    }
+}
+
+impl Loader<String, TFRecordLoader, io::Error> for TFRecordLoader
+{
+    fn load_ex(path_str: String, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    {
+        let meta = fs::metadata(&path_str).unwrap();
+        if meta.is_dir()
+        {
+            let paths: Vec<_> = fs::read_dir(&path_str)
+                .unwrap()
+                .filter_map(|entry_ret| {
+                    let entry = entry_ret.unwrap();
+                    let meta = entry.metadata().unwrap();
+                    let fname = entry.file_name().into_string().unwrap();
+
+                    if meta.is_file() && fname.ends_with(".tfrecord")
+                    {
+                        Some(entry.path())
+                    }
+                    else
+                    {
+                        None
+                    }
+
+                }).collect();
+            TFRecordLoader::load_ex(paths, options)
+        }
+        else if meta.is_file()
+        {
+            let path = PathBuf::from(path_str);
+            let path_list = vec![path];
+            TFRecordLoader::load_ex(path_list, options)
+        }
+        else
+        {
+            panic!("{} is not a file or directory", path_str);
+        }
+    }
+}
+
+impl Loader<&[&Path], TFRecordLoader, io::Error> for TFRecordLoader
+{
+    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    {
+        let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
+        TFRecordLoader::load_ex(cloned_paths, options)
+    }
+}
+
+impl Loader<Vec<PathBuf>, TFRecordLoader, io::Error> for TFRecordLoader
+{
+    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    {
+        let record_indexes = build_indexes_from_paths(paths, options.check_integrity, options.parallel).unwrap();
+
+        let file_list = match options.method {
+            LoaderMethod::Mmap => {
+                match options.open_limit {
+                    None => FileList::MmapMap(HashMap::new()),
+                    Some(0) => FileList::MmapOnDemand,
+                    Some(limit) => FileList::MmapLru(lru::LruCache::new(limit)),
+                }
+            }
+            LoaderMethod::File => {
+                match options.open_limit {
+                    None => FileList::FileMap(HashMap::new()),
+                    Some(0) => FileList::FileOnDemand,
+                    Some(limit) => FileList::FileLru(lru::LruCache::new(limit)),
+                }
+            }
+        };
+
+        let mut indexes = Vec::<RecordIndex>::new();
+
+        for (outer_ind, (_, file_index)) in record_indexes.iter().enumerate()
+        {
+            for inner_ind in 0..(file_index.len())
+            {
+                indexes.push((outer_ind, inner_ind));
+            }
+        }
+
+        Ok(
+            TFRecordLoader {
+                record_indexes,
+                indexes,
+                file_list,
+            }
+        )
+    }
+}
+
+impl Iterator for IndexIter
+{
+    type Item = RecordIndex;
+
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        if self.cursor < self.indexes.len()
+        {
+            let ret = self.indexes[self.cursor];
+            self.cursor += 1;
+            Some(ret)
+        }
+        else
+        {
+            None
+        }
+    }
+}
+
+impl DsIterator for IndexIter {}
+
+impl Iterator for RecordIter
+{
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        let indexes = self.loader.get_indexes();
+        if self.cursor < indexes.len()
+        {
+            let index = indexes[self.cursor];
+            let record = self.loader.fetch(index).unwrap();
+            self.cursor += 1;
+            Some(record)
+        }
+        else
+        {
+            None
+        }
+    }
+}
+
+impl DsIterator for RecordIter {}
 

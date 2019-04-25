@@ -3,6 +3,7 @@ use std::io;
 use std::collections::HashMap;
 use crate::from_tf::example;
 use crate::from_tf::feature::Feature_oneof_kind;
+use crate::error::make_corrupted_error;
 
 pub type Example = HashMap<String, FeatureList>;
 pub type SeqExample = (HashMap<String, FeatureList>, HashMap<String, FeatureSeqList>);
@@ -140,12 +141,4 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, Box<e
     }
 
     Ok((context_result, feature_result))
-}
-
-fn make_corrupted_error() -> io::Error {
-    io::Error::new(io::ErrorKind::Other, "corrupted error")
-}
-
-fn make_truncated_error() -> io::Error {
-    io::Error::new(io::ErrorKind::UnexpectedEof, "corrupted error")
 }

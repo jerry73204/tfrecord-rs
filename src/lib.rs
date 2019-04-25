@@ -11,3 +11,4 @@ mod from_tf;
 pub mod loader;
 pub mod iter;
 pub mod parser;
+pub mod error;

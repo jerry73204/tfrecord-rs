@@ -1,13 +1,14 @@
 use std::{io, ops, error, hash, cmp, marker, fmt};
-// use std::fmt::Debug;
 use std::collections::{HashMap, HashSet};
 use tch;
-use tensorflow as tf;
+// use tensorflow as tf;
 use crate::parser;
+use crate::loader;
+use crate::error::{ParseError, make_loading_error};
 
 // Trait defiintions
 
-pub trait DsIterator
+pub trait DsIterator: Iterator
 {
     fn into_tf_example(self, names: Option<HashSet<String>>) -> IntoTfExample<Self> where Self: Sized + Clone {
         IntoTfExample {
@@ -42,17 +43,18 @@ pub trait DsIterator
             dummy_error: marker::PhantomData,
         }
     }
+
+    fn load_by_tfrecord_index<V, E>(self, loader: loader::TFRecordLoader) -> LoadByTfRecordIndex<Self> where Self: Sized + Clone {
+        LoadByTfRecordIndex {
+            iter: self,
+            loader,
+        }
+    }
 }
 
 // Struct definitions
 
 type FeatureDict = HashMap<String, Feature>;
-
-#[derive(Debug, Clone)]
-pub struct ParseError
-{
-    desc: String,
-}
 
 pub enum Feature
 {
@@ -99,29 +101,13 @@ pub struct AssertOk<I, V, E>
     dummy_error: marker::PhantomData<E>,
 }
 
-impl ParseError
+pub struct LoadByTfRecordIndex<I>
 {
-    fn new(desc: &str) -> ParseError
-    {
-        ParseError {
-            desc: format!("Parsing error: {}", desc)
-        }
-    }
+    iter: I,
+    loader: loader::TFRecordLoader,
 }
 
-impl error::Error for ParseError
-{
-    fn description(&self) -> &str {
-        &self.desc
-    }
-}
-
-impl fmt::Display for ParseError
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "{}", self.desc)
-    }
-}
+// impl
 
 impl<I> Iterator for IntoTfExample<I> where
     I: Clone + Iterator<Item=Vec<u8>>,
@@ -355,6 +341,24 @@ impl<I, V, E> Iterator for AssertOk<I, V, E> where
         {
             None => None,
             Some(result) => Some(result.unwrap())
+        }
+    }
+}
+
+impl<I> Iterator for LoadByTfRecordIndex<I> where
+    I: Clone + Iterator<Item=loader::RecordIndex>,
+{
+    type Item = Result<Vec<u8>, io::Error>;
+
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        match self.iter.next()
+        {
+            None => None,
+            Some(index) => match self.loader.fetch(index) {
+                Some(record) => Some(Ok(record)),
+                None => Some(Err(make_loading_error())),
+            }
         }
     }
 }
