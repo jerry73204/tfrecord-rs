@@ -1,6 +1,6 @@
 # tfrecord-rs
 
-This repository provides TFRecord file reader implemented in Rust. The project is under development. Use it with caution.
+This repository provides TFRecord file reader implemented in Rust. *The project is under development.* Use it with caution.
 
 ## Get Started
 
@@ -10,6 +10,8 @@ tfrecord_rs = { git = "https://github.com/jerry73204/tfrecord-rs.git" }
 ```
 
 ## Example
+
+*The example is outdated!*
 
 ```rust
 use tfrecord_rs::FeatureValue;
@@ -48,6 +50,7 @@ fn example_loader() -> Result<(), Box<error::Error>>
 
 ## TODOs
 
-- Random access loader
-- Specific example iterator
-- Integration with tch-rs and tensorflow
+- Random access loader (almost done)
+- Example iterator (done)
+- Integration with tch-rs (partial)
+- Integration with tensorflow (not done)
