@@ -14,12 +14,17 @@ pub fn make_truncated_error() -> io::Error
 
 pub fn make_corrupted_error() -> io::Error
 {
-    io::Error::new(io::ErrorKind::Other, format!("TFRecord data is malformed"))
+    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid record data"))
 }
 
-pub fn make_loading_error() -> io::Error
+pub fn make_load_index_error() -> io::Error
 {
     io::Error::new(io::ErrorKind::Other, format!("Failed to load record data. Is the record index corrupted or the file is unreadable?"))
+}
+
+pub fn make_loader_error(path_str: &str) -> io::Error
+{
+    io::Error::new(io::ErrorKind::Other, format!("{} is not a file or directory", path_str))
 }
 
 // struct

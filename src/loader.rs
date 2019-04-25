@@ -16,7 +16,7 @@ use crc::crc32;
 use byteorder::{ReadBytesExt, LittleEndian};
 use rayon::prelude::*;
 use crate::iter::DsIterator;
-use crate::error::{make_checksum_error,make_truncated_error};
+use crate::error::{make_checksum_error, make_truncated_error, make_loader_error};
 
 // Helper functions
 
@@ -253,22 +253,24 @@ enum FileList
     FileOnDemand,
 }
 
-pub struct TFRecordLoader
+pub struct IndexedLoader
 {
     indexes: Vec<RecordIndex>,
     record_indexes: Vec<(Arc<PathBuf>, Vec<RecordIndex>)>,
     file_list: FileList,
 }
 
+#[derive(Clone)]
 pub struct IndexIter
 {
     cursor: usize,
     indexes: Vec<RecordIndex>,
 }
 
+#[derive(Clone)]
 pub struct RecordIter
 {
-    loader: TFRecordLoader,
+    loader_rc: Arc<IndexedLoader>,
     cursor: usize,
 }
 
@@ -291,7 +293,7 @@ impl Default for LoaderOptions
 }
 
 
-impl TFRecordLoader
+impl IndexedLoader
 {
     pub fn index_iter(&self) -> IndexIter
     {
@@ -305,7 +307,7 @@ impl TFRecordLoader
     {
         RecordIter {
             cursor: 0,
-            loader: self,
+            loader_rc: Arc::new(self),
         }
     }
 
@@ -317,9 +319,9 @@ impl TFRecordLoader
     pub fn fetch(&mut self, index: RecordIndex) -> Option<Vec<u8>>
     {
         let (outer_ind, inner_ind) = index;
-        let (path_rc, file_index) = self.record_indexes.get(outer_ind)?;
+        let (path_rc, file_index) = self.record_indexes.get_mut(outer_ind)?;
         let (offset_ref, len_ref) = file_index.get(inner_ind)?;
-        let path = Arc::try_unwrap(path_rc.clone()).unwrap();
+        // let mut path = Arc::get_mut(path_rc).unwrap();
         let offset = *offset_ref;
         let len = *len_ref;
 
@@ -332,16 +334,18 @@ impl TFRecordLoader
 
         match self.file_list {
             FileList::FileOnDemand => {
+                let path = Arc::get_mut(path_rc).unwrap();
                 let file = File::open(path).unwrap();
                 let buf = read_from_file(&file, offset, len).unwrap();
                 Some(buf)
             }
             FileList::FileMap(ref mut file_map) => {
-                let buf = match file_map.get(&path) {
+                let buf = match file_map.get(path_rc) {
                     Some(file) => {
                         read_from_file(file, offset, len).unwrap()
                     },
                     None => {
+                        let path = Arc::get_mut(path_rc).unwrap();
                         let file = File::open(path).unwrap();
                         let buf = read_from_file(&file, offset, len).unwrap();
                         file_map.insert(path_rc.clone(), file);
@@ -357,6 +361,7 @@ impl TFRecordLoader
                         read_from_file(&file, offset, len).unwrap()
                     }
                     None => {
+                        let path = Arc::get_mut(path_rc).unwrap();
                         let file = File::open(path).unwrap();
                         let buf = read_from_file(&file, offset, len).unwrap();
                         file_lru.put(path_rc.clone(), file);
@@ -367,17 +372,19 @@ impl TFRecordLoader
                 Some(buf)
             }
             FileList::MmapOnDemand => {
+                let path = Arc::get_mut(path_rc).unwrap();
                 let file = File::open(path).unwrap();
                 let mmap = unsafe { memmap::Mmap::map(&file).unwrap() };
                 let buf = mmap.get(offset..(offset + len)).unwrap();
                 Some(buf.to_vec())
             }
             FileList::MmapMap(ref mut mmap_map) => {
-                let buf = match mmap_map.get(&path) {
+                let buf = match mmap_map.get(path_rc) {
                     Some(mmap) => {
                         mmap.get(offset..(offset + len)).unwrap().to_vec()
                     },
                     None => {
+                        let path = Arc::get_mut(path_rc).unwrap();
                         let file = File::open(path).unwrap();
                         let mmap = unsafe { memmap::Mmap::map(&file).unwrap() };
                         let buf = mmap.get(offset..(offset + len)).unwrap().to_vec();
@@ -394,6 +401,7 @@ impl TFRecordLoader
                         mmap.get(offset..(offset + len)).unwrap().to_vec()
                     }
                     None => {
+                        let path = Arc::get_mut(path_rc).unwrap();
                         let file = File::open(path).unwrap();
                         let mmap = unsafe { memmap::Mmap::map(&file).unwrap() };
                         let buf = mmap.get(offset..(offset + len)).unwrap().to_vec();
@@ -409,17 +417,17 @@ impl TFRecordLoader
 }
 
 
-impl Loader<&str, TFRecordLoader, io::Error> for TFRecordLoader
+impl Loader<&str, IndexedLoader, io::Error> for IndexedLoader
 {
-    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
     {
-        TFRecordLoader::load_ex(path_str.to_owned(), options)
+        IndexedLoader::load_ex(path_str.to_owned(), options)
     }
 }
 
-impl Loader<String, TFRecordLoader, io::Error> for TFRecordLoader
+impl Loader<String, IndexedLoader, io::Error> for IndexedLoader
 {
-    fn load_ex(path_str: String, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    fn load_ex(path_str: String, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
     {
         let meta = fs::metadata(&path_str).unwrap();
         if meta.is_dir()
@@ -441,33 +449,115 @@ impl Loader<String, TFRecordLoader, io::Error> for TFRecordLoader
                     }
 
                 }).collect();
-            TFRecordLoader::load_ex(paths, options)
+            IndexedLoader::load_ex(paths, options)
         }
         else if meta.is_file()
         {
             let path = PathBuf::from(path_str);
             let path_list = vec![path];
-            TFRecordLoader::load_ex(path_list, options)
+            IndexedLoader::load_ex(path_list, options)
         }
         else
         {
-            panic!("{} is not a file or directory", path_str);
+            Err(make_loader_error(&path_str))
         }
     }
 }
 
-impl Loader<&[&Path], TFRecordLoader, io::Error> for TFRecordLoader
+impl Loader<Vec<&str>, IndexedLoader, io::Error> for IndexedLoader
 {
-    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
     {
-        let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
-        TFRecordLoader::load_ex(cloned_paths, options)
+        let paths: Vec<_> = path_strs.into_iter()
+            .map(|orig| PathBuf::from(orig))
+            .collect();
+        IndexedLoader::load_ex(paths, options)
     }
 }
 
-impl Loader<Vec<PathBuf>, TFRecordLoader, io::Error> for TFRecordLoader
+impl Loader<Vec<String>, IndexedLoader, io::Error> for IndexedLoader
 {
-    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<TFRecordLoader, io::Error>
+    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
+    {
+        let paths: Vec<_> = path_strs.into_iter()
+            .map(|orig| PathBuf::from(orig))
+            .collect();
+        IndexedLoader::load_ex(paths, options)
+    }
+}
+
+impl Loader<&[&Path], IndexedLoader, io::Error> for IndexedLoader
+{
+    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<IndexedLoader, io::Error>
+    {
+        let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
+        IndexedLoader::load_ex(cloned_paths, options)
+    }
+}
+
+impl Loader<Vec<&Path>, IndexedLoader, io::Error> for IndexedLoader
+{
+    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
+    {
+        let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
+        IndexedLoader::load_ex(cloned_paths, options)
+    }
+}
+
+impl Loader<&Path, IndexedLoader, io::Error> for IndexedLoader
+{
+    fn load_ex(path: &Path, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
+    {
+        IndexedLoader::load_ex(path.to_owned(), options)
+    }
+}
+
+impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader
+{
+    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
+    {
+        let meta = fs::metadata(&path).unwrap();
+        if meta.is_dir()
+        {
+            let paths: Vec<_> = fs::read_dir(&path)
+                .unwrap()
+                .filter_map(|entry_ret| {
+                    let entry = entry_ret.unwrap();
+                    let meta = entry.metadata().unwrap();
+                    let fname = entry.file_name().into_string().unwrap();
+
+                    if meta.is_file() && fname.ends_with(".tfrecord")
+                    {
+                        Some(entry.path())
+                    }
+                    else
+                    {
+                        None
+                    }
+
+                }).collect();
+            IndexedLoader::load_ex(paths, options)
+        }
+        else if meta.is_file()
+        {
+            let path_list = vec![path];
+            IndexedLoader::load_ex(path_list, options)
+        }
+        else
+        {
+            let path_str = match path.to_str()
+            {
+                Some(path_str) => path_str,
+                None => "",
+            };
+            Err(make_loader_error(path_str))
+        }
+    }
+}
+
+impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader
+{
+    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
     {
         let record_indexes = build_indexes_from_paths(paths, options.check_integrity, options.parallel).unwrap();
 
@@ -499,7 +589,7 @@ impl Loader<Vec<PathBuf>, TFRecordLoader, io::Error> for TFRecordLoader
         }
 
         Ok(
-            TFRecordLoader {
+            IndexedLoader {
                 record_indexes,
                 indexes,
                 file_list,
@@ -535,11 +625,12 @@ impl Iterator for RecordIter
 
     fn next(&mut self) -> Option<Self::Item>
     {
-        let indexes = self.loader.get_indexes();
+        let loader = Arc::get_mut(&mut self.loader_rc).unwrap();
+        let indexes = loader.get_indexes();
         if self.cursor < indexes.len()
         {
             let index = indexes[self.cursor];
-            let record = self.loader.fetch(index).unwrap();
+            let record = loader.fetch(index).unwrap();
             self.cursor += 1;
             Some(record)
         }
@@ -551,4 +642,3 @@ impl Iterator for RecordIter
 }
 
 impl DsIterator for RecordIter {}
-

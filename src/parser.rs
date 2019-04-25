@@ -22,7 +22,7 @@ pub enum FeatureSeqList
     I64(Vec<Vec<i64>>),
 }
 
-pub fn parse_single_example(payload: &[u8]) -> Result<Example, Box<error::Error>>
+pub fn parse_single_example(payload: &[u8]) -> Result<Example, io::Error>
 {
     let mut example: example::Example = protobuf::parse_from_bytes(payload)?;
     let features = example.take_features().take_feature();
@@ -48,7 +48,7 @@ pub fn parse_single_example(payload: &[u8]) -> Result<Example, Box<error::Error>
     Ok(result)
 }
 
-pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, Box<error::Error>>
+pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, io::Error>
 {
     let mut seq_example: example::SequenceExample = protobuf::parse_from_bytes(payload)?;
     let context = seq_example.take_context().take_feature();
@@ -110,7 +110,7 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, Box<e
                     }
                     else
                     {
-                        return Err(Box::new(make_corrupted_error()));
+                        return Err(make_corrupted_error());
                     }
                 }
                 Some(Feature_oneof_kind::float_list(mut val)) => {
@@ -120,7 +120,7 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, Box<e
                     }
                     else
                     {
-                        return Err(Box::new(make_corrupted_error()));
+                        return Err(make_corrupted_error());
                     }
                 }
                 Some(Feature_oneof_kind::int64_list(mut val)) => {
@@ -130,7 +130,7 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, Box<e
                     }
                     else
                     {
-                        return Err(Box::new(make_corrupted_error()));
+                        return Err(make_corrupted_error());
                     }
                 }
                 None => (),

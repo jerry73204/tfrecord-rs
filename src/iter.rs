@@ -4,47 +4,47 @@ use tch;
 // use tensorflow as tf;
 use crate::parser;
 use crate::loader;
-use crate::error::{ParseError, make_loading_error};
+use crate::error::{ParseError, make_load_index_error};
 
 // Trait defiintions
 
 pub trait DsIterator: Iterator
 {
-    fn into_tf_example(self, names: Option<HashSet<String>>) -> IntoTfExample<Self> where Self: Sized + Clone {
+    fn into_tf_example(self, names: Option<HashSet<String>>) -> IntoTfExample<Self> where Self: Sized {
         IntoTfExample {
             iter: self,
             names,
         }
     }
 
-    fn into_torch_tensor(self) -> IntoTorchTensor<Self> where Self: Sized + Clone {
+    fn into_torch_tensor(self) -> IntoTorchTensor<Self> where Self: Sized {
         IntoTorchTensor {
             iter: self,
         }
     }
 
-    fn into_tf_tensor(self) -> IntoTfTensor<Self> where Self: Sized + Clone {
+    fn into_tf_tensor(self) -> IntoTfTensor<Self> where Self: Sized {
         IntoTfTensor {
             iter: self,
         }
     }
 
-    fn filter_hashmap_entry<K>(self, keys: HashSet<K>) -> FilterHashMapEntry<Self, K> where Self: Sized + Clone {
+    fn filter_hashmap_entry<K>(self, keys: HashSet<K>) -> FilterHashMapEntry<Self, K> where Self: Sized {
         FilterHashMapEntry {
             iter: self,
             keys,
         }
     }
 
-    fn assert_ok<V, E>(self) -> AssertOk<Self, V, E> where Self: Sized + Clone {
-        AssertOk {
+    fn unwrap_ok<V, E>(self) -> UnwrapOk<Self, V, E> where Self: Sized {
+        UnwrapOk {
             iter: self,
             dummy_value: marker::PhantomData,
             dummy_error: marker::PhantomData,
         }
     }
 
-    fn load_by_tfrecord_index<V, E>(self, loader: loader::TFRecordLoader) -> LoadByTfRecordIndex<Self> where Self: Sized + Clone {
+    fn load_by_tfrecord_index<V, E>(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> where Self: Sized {
         LoadByTfRecordIndex {
             iter: self,
             loader,
@@ -72,29 +72,34 @@ pub enum FeatureShape<'a>
     FixedRef(&'a [i64]),
 }
 
+#[derive(Clone)]
 pub struct IntoTfExample<I>
 {
     names: Option<HashSet<String>>,
     iter: I,
 }
 
+#[derive(Clone)]
 pub struct IntoTorchTensor<I>
 {
     iter: I,
 }
 
+#[derive(Clone)]
 pub struct IntoTfTensor<I>
 {
     iter: I,
 }
 
+#[derive(Clone)]
 pub struct FilterHashMapEntry<I, K>
 {
     keys: HashSet<K>,
     iter: I,
 }
 
-pub struct AssertOk<I, V, E>
+#[derive(Clone)]
+pub struct UnwrapOk<I, V, E>
 {
     iter: I,
     dummy_value: marker::PhantomData<V>,
@@ -104,15 +109,15 @@ pub struct AssertOk<I, V, E>
 pub struct LoadByTfRecordIndex<I>
 {
     iter: I,
-    loader: loader::TFRecordLoader,
+    loader: loader::IndexedLoader,
 }
 
 // impl
 
 impl<I> Iterator for IntoTfExample<I> where
-    I: Clone + Iterator<Item=Vec<u8>>,
+    I: Iterator<Item=Vec<u8>>,
 {
-    type Item = Result<FeatureDict, Box<error::Error>>;
+    type Item = Result<FeatureDict, io::Error>;
 
     fn next(&mut self) -> Option<Self::Item>
     {
@@ -179,8 +184,12 @@ impl<I> Iterator for IntoTfExample<I> where
     }
 }
 
+impl<I> DsIterator for IntoTfExample<I> where
+    I: Iterator<Item=Vec<u8>>,
+{}
+
 impl<I> Iterator for IntoTorchTensor<I> where
-    I: Clone + Iterator<Item=FeatureDict>
+    I: Iterator<Item=FeatureDict>
 {
     type Item = Result<HashMap<String, tch::Tensor>, ParseError>;
 
@@ -241,10 +250,15 @@ impl<I> Iterator for IntoTorchTensor<I> where
     }
 }
 
+impl<I> DsIterator for IntoTorchTensor<I> where
+    I: Iterator<Item=FeatureDict>
+{}
+
 
 // TODO: implementation
+
 // impl<'a, I> Iterator for IntoTfTensor<'a, I> where
-//     I: Clone + Iterator<Item=FeatureDict>
+//     I: Iterator<Item=FeatureDict>
 // {
 //     type Item = Result<HashMap<String, T>, ParseError>;
 
@@ -304,8 +318,13 @@ impl<I> Iterator for IntoTorchTensor<I> where
 //     }
 // }
 
+// impl<I> DsIterator for IntoTfTensor<I> where
+//     I: Iterator<Item=FeatureDict>
+// {}
+
+
 impl<I, K, V> Iterator for FilterHashMapEntry<I, K> where
-    I: Clone + Iterator<Item=HashMap<K, V>>,
+    I: Iterator<Item=HashMap<K, V>>,
     K: hash::Hash + cmp::Eq
 {
     type Item = HashMap<K, V>;
@@ -329,9 +348,14 @@ impl<I, K, V> Iterator for FilterHashMapEntry<I, K> where
     }
 }
 
-impl<I, V, E> Iterator for AssertOk<I, V, E> where
-    I: Clone + Iterator<Item=Result<V, E>>,
-    E: error::Error,
+impl<I, K, V> DsIterator for FilterHashMapEntry<I, K> where
+    I: Iterator<Item=HashMap<K, V>>,
+    K: hash::Hash + cmp::Eq
+{}
+
+
+impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
+    I: Iterator<Item=Result<V, E>>,
 {
     type Item = V;
 
@@ -340,13 +364,18 @@ impl<I, V, E> Iterator for AssertOk<I, V, E> where
         match self.iter.next()
         {
             None => None,
-            Some(result) => Some(result.unwrap())
+            Some(result) => Some(result.ok().unwrap())
         }
     }
 }
 
+impl<I, V, E> DsIterator for UnwrapOk<I, V, E> where
+    I: Iterator<Item=Result<V, E>>,
+{}
+
+
 impl<I> Iterator for LoadByTfRecordIndex<I> where
-    I: Clone + Iterator<Item=loader::RecordIndex>,
+    I: Iterator<Item=loader::RecordIndex>,
 {
     type Item = Result<Vec<u8>, io::Error>;
 
@@ -357,8 +386,12 @@ impl<I> Iterator for LoadByTfRecordIndex<I> where
             None => None,
             Some(index) => match self.loader.fetch(index) {
                 Some(record) => Some(Ok(record)),
-                None => Some(Err(make_loading_error())),
+                None => Some(Err(make_load_index_error())),
             }
         }
     }
 }
+
+impl<I> DsIterator for LoadByTfRecordIndex<I> where
+    I: Iterator<Item=loader::RecordIndex>,
+{}
