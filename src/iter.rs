@@ -44,7 +44,7 @@ pub trait DsIterator: Iterator
         }
     }
 
-    fn load_by_tfrecord_index<V, E>(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> where Self: Sized {
+    fn load_by_tfrecord_index(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> where Self: Sized {
         LoadByTfRecordIndex {
             iter: self,
             loader,
@@ -356,6 +356,7 @@ impl<I, K, V> DsIterator for FilterHashMapEntry<I, K> where
 
 impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
+    E: error::Error,
 {
     type Item = V;
 
@@ -364,13 +365,14 @@ impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
         match self.iter.next()
         {
             None => None,
-            Some(result) => Some(result.ok().unwrap())
+            Some(result) => Some(result.unwrap())
         }
     }
 }
 
 impl<I, V, E> DsIterator for UnwrapOk<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
+    E: error::Error,
 {}
 
 

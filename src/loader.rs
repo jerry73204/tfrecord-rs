@@ -2,6 +2,7 @@ use std::io;
 use std::io::Seek;
 use std::io::Read;
 use std::iter;
+use std::vec;
 use std::marker;
 use std::slice;
 use std::path::{Path, PathBuf};
@@ -62,7 +63,7 @@ fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>,
 }
 
 fn try_read_record<R>(reader: &mut R, len: usize, check_integrity: bool) -> Result<Vec<u8>, io::Error> where
-    R: io::Read
+    R: io::Read + io::Seek
 {
     let mut buf = Vec::<u8>::new();
     buf.resize(len, 0);
@@ -253,6 +254,13 @@ enum FileList
     FileOnDemand,
 }
 
+pub struct SeqLoader
+{
+    options: LoaderOptions,
+    paths_iter: vec::IntoIter<PathBuf>,
+    file_opt: Option<fs::File>,
+}
+
 pub struct IndexedLoader
 {
     indexes: Vec<RecordIndex>,
@@ -268,7 +276,7 @@ pub struct IndexIter
 }
 
 #[derive(Clone)]
-pub struct RecordIter
+pub struct IndexRecordIter
 {
     loader_rc: Arc<IndexedLoader>,
     cursor: usize,
@@ -303,9 +311,9 @@ impl IndexedLoader
         }
     }
 
-    pub fn into_record_iter(self) -> RecordIter
+    pub fn into_record_iter(self) -> IndexRecordIter
     {
-        RecordIter {
+        IndexRecordIter {
             cursor: 0,
             loader_rc: Arc::new(self),
         }
@@ -429,38 +437,8 @@ impl Loader<String, IndexedLoader, io::Error> for IndexedLoader
 {
     fn load_ex(path_str: String, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
     {
-        let meta = fs::metadata(&path_str).unwrap();
-        if meta.is_dir()
-        {
-            let paths: Vec<_> = fs::read_dir(&path_str)
-                .unwrap()
-                .filter_map(|entry_ret| {
-                    let entry = entry_ret.unwrap();
-                    let meta = entry.metadata().unwrap();
-                    let fname = entry.file_name().into_string().unwrap();
-
-                    if meta.is_file() && fname.ends_with(".tfrecord")
-                    {
-                        Some(entry.path())
-                    }
-                    else
-                    {
-                        None
-                    }
-
-                }).collect();
-            IndexedLoader::load_ex(paths, options)
-        }
-        else if meta.is_file()
-        {
-            let path = PathBuf::from(path_str);
-            let path_list = vec![path];
-            IndexedLoader::load_ex(path_list, options)
-        }
-        else
-        {
-            Err(make_loader_error(&path_str))
-        }
+        let path = PathBuf::from(path_str);
+        IndexedLoader::load_ex(path, options)
     }
 }
 
@@ -598,6 +576,176 @@ impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader
     }
 }
 
+
+impl Loader<&str, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        SeqLoader::load_ex(path_str.to_owned(), options)
+    }
+}
+
+impl Loader<String, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(path_str: String, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        let path = PathBuf::from(path_str);
+        SeqLoader::load_ex(path, options)
+    }
+}
+
+impl Loader<Vec<&str>, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        let paths: Vec<_> = path_strs.into_iter()
+            .map(|orig| PathBuf::from(orig))
+            .collect();
+        SeqLoader::load_ex(paths, options)
+    }
+}
+
+impl Loader<Vec<String>, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        let paths: Vec<_> = path_strs.into_iter()
+            .map(|orig| PathBuf::from(orig))
+            .collect();
+        SeqLoader::load_ex(paths, options)
+    }
+}
+
+impl Loader<&[&Path], SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
+        SeqLoader::load_ex(cloned_paths, options)
+    }
+}
+
+impl Loader<Vec<&Path>, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
+        SeqLoader::load_ex(cloned_paths, options)
+    }
+}
+
+impl Loader<&Path, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(path: &Path, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        SeqLoader::load_ex(path.to_owned(), options)
+    }
+}
+
+impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        let meta = fs::metadata(&path).unwrap();
+        if meta.is_dir()
+        {
+            let paths: Vec<_> = fs::read_dir(&path)
+                .unwrap()
+                .filter_map(|entry_ret| {
+                    let entry = entry_ret.unwrap();
+                    let meta = entry.metadata().unwrap();
+                    let fname = entry.file_name().into_string().unwrap();
+
+                    if meta.is_file() && fname.ends_with(".tfrecord")
+                    {
+                        Some(entry.path())
+                    }
+                    else
+                    {
+                        None
+                    }
+
+                }).collect();
+            SeqLoader::load_ex(paths, options)
+        }
+        else if meta.is_file()
+        {
+            let path_list = vec![path];
+            SeqLoader::load_ex(path_list, options)
+        }
+        else
+        {
+            let path_str = match path.to_str()
+            {
+                Some(path_str) => path_str,
+                None => "",
+            };
+            Err(make_loader_error(path_str))
+        }
+    }
+}
+
+impl Loader<Vec<PathBuf>, SeqLoader, io::Error> for SeqLoader
+{
+    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
+    {
+        let paths_iter = paths.into_iter();
+        let file_opt = None;
+        Ok(
+            SeqLoader {
+                options,
+                paths_iter,
+                file_opt,
+            }
+        )
+    }
+}
+
+impl Iterator for SeqLoader
+{
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        let (mut file, len) = loop
+        {
+            match &mut self.file_opt
+            {
+                None => {
+                    match self.paths_iter.next()
+                    {
+                        None => return None,
+                        Some(path) => {
+                            self.file_opt = Some(fs::File::open(path).unwrap());
+                            continue
+                        }
+                    }
+                }
+                Some(ref mut file) => {
+                    match try_read_len(file, self.options.check_integrity).unwrap()
+                    {
+                        Some(len) => break (file, len),
+                        None => {
+                            self.file_opt = None;
+                            continue
+                        }
+                    }
+                }
+            }
+        };
+
+        let record = try_read_record(
+            &mut file,
+            len as usize,
+            self.options.check_integrity
+        ).unwrap();
+        Some(record)
+    }
+}
+
+impl DsIterator for SeqLoader {}
+
+
 impl Iterator for IndexIter
 {
     type Item = RecordIndex;
@@ -619,7 +767,7 @@ impl Iterator for IndexIter
 
 impl DsIterator for IndexIter {}
 
-impl Iterator for RecordIter
+impl Iterator for IndexRecordIter
 {
     type Item = Vec<u8>;
 
@@ -641,4 +789,4 @@ impl Iterator for RecordIter
     }
 }
 
-impl DsIterator for RecordIter {}
+impl DsIterator for IndexRecordIter {}
