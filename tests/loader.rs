@@ -78,6 +78,7 @@ fn indexed_loader_index_iter_test() -> Result<(), Box<error::Error>>
 
     let loader = IndexedLoader::load(out_path)?;
     let record_cnt = loader.index_iter()
+        .shuffle(10)
         .load_by_tfrecord_index(loader)
         .unwrap_ok()
         .fold(0, |mut cnt, val| {

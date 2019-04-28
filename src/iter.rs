@@ -1,4 +1,5 @@
 use std::{io, ops, error, hash, cmp, marker, collections::hash_map};
+use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
 use tch;
 use image::{ImageFormat, ImageDecoder};
@@ -11,6 +12,7 @@ use image::tiff::TIFFDecoder;
 use image::tga::TGADecoder;
 use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
+use rand::prelude::*;
 
 // use tensorflow as tf;
 use crate::parser;
@@ -21,27 +23,35 @@ use crate::error::{ParseError, make_load_index_error};
 
 pub trait DsIterator: Iterator
 {
-    fn into_tf_example(self, names: Option<HashSet<String>>) -> IntoTfExample<Self> where Self: Sized {
+    fn into_tf_example(self, names: Option<HashSet<String>>) -> IntoTfExample<Self> where
+        Self: Sized
+    {
         IntoTfExample {
             iter: self,
             names,
         }
     }
 
-    fn decode_image(self, formats: HashMap<String, Option<ImageFormat>>) -> DecodeImage<Self> where Self: Sized {
+    fn decode_image(self, formats: HashMap<String, Option<ImageFormat>>) -> DecodeImage<Self> where
+        Self: Sized
+    {
         DecodeImage {
             iter: self,
             formats,
         }
     }
 
-    fn into_torch_tensor(self) -> IntoTorchTensor<Self> where Self: Sized {
+    fn into_torch_tensor(self) -> IntoTorchTensor<Self> where
+        Self: Sized
+    {
         IntoTorchTensor {
             iter: self,
         }
     }
 
-    fn into_tf_tensor(self) -> IntoTfTensor<Self> where Self: Sized {
+    fn into_tf_tensor(self) -> IntoTfTensor<Self> where
+        Self: Sized
+    {
         IntoTfTensor {
             iter: self,
         }
@@ -54,7 +64,9 @@ pub trait DsIterator: Iterator
         }
     }
 
-    fn unwrap_result<V, E>(self) -> UnwrapResult<Self, V, E> where Self: Sized {
+    fn unwrap_result<V, E>(self) -> UnwrapResult<Self, V, E> where
+        Self: Sized
+    {
         UnwrapResult {
             iter: self,
             dummy_value: marker::PhantomData,
@@ -62,7 +74,9 @@ pub trait DsIterator: Iterator
         }
     }
 
-    fn unwrap_ok<V, E>(self) -> UnwrapOk<Self, V, E> where Self: Sized {
+    fn unwrap_ok<V, E>(self) -> UnwrapOk<Self, V, E> where
+        Self: Sized
+    {
         UnwrapOk {
             iter: self,
             dummy_value: marker::PhantomData,
@@ -70,7 +84,34 @@ pub trait DsIterator: Iterator
         }
     }
 
-    fn load_by_tfrecord_index(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> where Self: Sized {
+    fn shuffle(self, buf_size: usize) -> Shuffle<Self> where
+        Self: Sized + Iterator,
+    {
+        let buffer = VecDeque::with_capacity(buf_size);
+        let rng = rand::thread_rng();
+
+        Shuffle {
+            iter: self,
+            buffer,
+            rng,
+        }
+    }
+
+    // TODO
+    // fn prefetch(self, buf_size: usize) -> Prefetch<Self> where
+    //     Self: Sized + Iterator,
+    // {
+    //     let buffer = Vec::with_capacity(buf_size);
+
+    //     Prefetch {
+    //         iter: self,
+    //         buffer,
+    //     }
+    // }
+
+    fn load_by_tfrecord_index(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> where
+        Self: Sized
+    {
         LoadByTfRecordIndex {
             iter: self,
             loader,
@@ -147,6 +188,21 @@ pub struct DecodeImage<I>
     formats: HashMap<String, Option<ImageFormat>>,
     iter: I,
 }
+
+#[derive(Clone)]
+pub struct Shuffle<I: Iterator>
+{
+    iter: I,
+    buffer: VecDeque<I::Item>,
+    rng: rand::rngs::ThreadRng,
+}
+
+// #[derive(Clone)]
+// pub struct Prefetch<I: Iterator>
+// {
+//     iter: I,
+//     buffer: Vec<I::Item>,
+// }
 
 pub struct LoadByTfRecordIndex<I>
 {
@@ -643,3 +699,46 @@ impl<I> Iterator for DecodeImage<I> where
         }
     }
 }
+
+impl<I> Iterator for Shuffle<I> where
+    I: Iterator,
+{
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        let capacity = self.buffer.capacity();
+        if capacity > 0
+        {
+            while self.buffer.len() < capacity
+            {
+                match self.iter.next()
+                {
+                    None => break,
+                    Some(item) => self.buffer.push_back(item),
+                }
+            }
+
+            let buf_len = self.buffer.len();
+            for ind in 0..buf_len
+            {
+                let swap_ind = self.rng.gen_range(ind, buf_len);
+                self.buffer.swap(ind, swap_ind);
+            }
+            self.buffer.pop_back()
+        }
+        else
+        {
+            self.iter.next()
+        }
+    }
+}
+
+// TODO
+// impl<I> Iterator for Prefetch<I> where
+//     I: Iterator,
+// {
+//     type Item = I::Item;
+//     fn next(&mut self) -> Option<Self::Item>
+//     {
+//     }
+// }
