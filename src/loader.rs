@@ -1,6 +1,5 @@
 use std::io;
-use std::io::Seek;
-use std::io::Read;
+use std::io::{Seek, Read, BufReader};
 use std::iter;
 use std::vec;
 use std::marker;
@@ -89,7 +88,7 @@ pub fn build_indexes_from_paths(
 ) -> Result<Vec<(Arc<PathBuf>, Vec<(usize, usize)>)>, io::Error>
 {
     let load_file = |path| -> Result<_, io::Error> {
-        let mut file = File::open(&path)?;
+        let mut file = BufReader::new(File::open(&path)?);
         let index = build_index_from_reader(&mut file, check_integrity)?;
         Ok((Arc::new(path), index))
     };
@@ -249,8 +248,8 @@ enum FileList
     MmapLru(lru::LruCache<Arc<PathBuf>, memmap::Mmap>),
     MmapMap(HashMap<Arc<PathBuf>, memmap::Mmap>),
     MmapOnDemand,
-    FileLru(lru::LruCache<Arc<PathBuf>, File>),
-    FileMap(HashMap<Arc<PathBuf>, File>),
+    FileLru(lru::LruCache<Arc<PathBuf>, BufReader<File>>),
+    FileMap(HashMap<Arc<PathBuf>, BufReader<File>>),
     FileOnDemand,
 }
 
@@ -333,7 +332,7 @@ impl IndexedLoader
         let offset = *offset_ref;
         let len = *len_ref;
 
-        let read_from_file = |mut file: &File, off: usize, len: usize| -> Result<Vec<u8>, io::Error> {
+        let read_from_file = |file: &mut BufReader<File>, off: usize, len: usize| -> Result<Vec<u8>, io::Error> {
             let mut buf = vec![0u8; len];
             file.seek(io::SeekFrom::Start(off as u64))?;
             file.read_exact(&mut buf)?;
@@ -343,19 +342,20 @@ impl IndexedLoader
         match self.file_list {
             FileList::FileOnDemand => {
                 let path = Arc::get_mut(path_rc).unwrap();
-                let file = File::open(path).unwrap();
-                let buf = read_from_file(&file, offset, len).unwrap();
+                let mut file = BufReader::new(File::open(path).unwrap());
+                let buf = read_from_file(&mut file, offset, len).unwrap();
                 Some(buf)
             }
             FileList::FileMap(ref mut file_map) => {
-                let buf = match file_map.get(path_rc) {
-                    Some(file) => {
+                let buf = match file_map.get_mut(path_rc)
+                {
+                    Some(ref mut file) => {
                         read_from_file(file, offset, len).unwrap()
                     },
                     None => {
                         let path = Arc::get_mut(path_rc).unwrap();
-                        let file = File::open(path).unwrap();
-                        let buf = read_from_file(&file, offset, len).unwrap();
+                        let mut file = BufReader::new(File::open(path).unwrap());
+                        let buf = read_from_file(&mut file, offset, len).unwrap();
                         file_map.insert(path_rc.clone(), file);
                         buf
                     }
@@ -364,14 +364,14 @@ impl IndexedLoader
                 Some(buf)
             }
             FileList::FileLru(ref mut file_lru) => {
-                let buf = match file_lru.get(path_rc) {
+                let buf = match file_lru.get_mut(path_rc) {
                     Some(file) => {
-                        read_from_file(&file, offset, len).unwrap()
+                        read_from_file(file, offset, len).unwrap()
                     }
                     None => {
                         let path = Arc::get_mut(path_rc).unwrap();
-                        let file = File::open(path).unwrap();
-                        let buf = read_from_file(&file, offset, len).unwrap();
+                        let mut file = BufReader::new(File::open(path).unwrap());
+                        let buf = read_from_file(&mut file, offset, len).unwrap();
                         file_lru.put(path_rc.clone(), file);
                         buf
                     }
@@ -743,9 +743,6 @@ impl Iterator for SeqLoader
     }
 }
 
-impl DsIterator for SeqLoader {}
-
-
 impl Iterator for IndexIter
 {
     type Item = RecordIndex;
@@ -764,8 +761,6 @@ impl Iterator for IndexIter
         }
     }
 }
-
-impl DsIterator for IndexIter {}
 
 impl Iterator for IndexRecordIter
 {
@@ -788,5 +783,3 @@ impl Iterator for IndexRecordIter
         }
     }
 }
-
-impl DsIterator for IndexRecordIter {}

@@ -1,6 +1,17 @@
-use std::{io, ops, error, hash, cmp, marker, fmt};
+use std::{io, ops, error, hash, cmp, marker, collections::hash_map};
 use std::collections::{HashMap, HashSet};
 use tch;
+use image::{ImageFormat, ImageDecoder};
+use image::png::PNGDecoder;
+use image::jpeg::JPEGDecoder;
+use image::gif::Decoder as GIFDecoder;
+use image::webp::WebpDecoder;
+use image::pnm::PNMDecoder;
+use image::tiff::TIFFDecoder;
+use image::tga::TGADecoder;
+use image::bmp::BMPDecoder;
+use image::ico::ICODecoder;
+
 // use tensorflow as tf;
 use crate::parser;
 use crate::loader;
@@ -14,6 +25,13 @@ pub trait DsIterator: Iterator
         IntoTfExample {
             iter: self,
             names,
+        }
+    }
+
+    fn decode_image(self, formats: HashMap<String, Option<ImageFormat>>) -> DecodeImage<Self> where Self: Sized {
+        DecodeImage {
+            iter: self,
+            formats,
         }
     }
 
@@ -33,6 +51,14 @@ pub trait DsIterator: Iterator
         FilterHashMapEntry {
             iter: self,
             keys,
+        }
+    }
+
+    fn unwrap_result<V, E>(self) -> UnwrapResult<Self, V, E> where Self: Sized {
+        UnwrapResult {
+            iter: self,
+            dummy_value: marker::PhantomData,
+            dummy_error: marker::PhantomData,
         }
     }
 
@@ -64,6 +90,7 @@ pub enum Feature
     BytesSeqList(Vec<Vec<Vec<u8>>>),
     F32SeqList(Vec<Vec<f32>>),
     I64SeqList(Vec<Vec<i64>>),
+    ImageList(Vec<Vec<u8>>),
 }
 
 pub enum FeatureShape<'a>
@@ -99,11 +126,26 @@ pub struct FilterHashMapEntry<I, K>
 }
 
 #[derive(Clone)]
+pub struct UnwrapResult<I, V, E>
+{
+    iter: I,
+    dummy_value: marker::PhantomData<V>,
+    dummy_error: marker::PhantomData<E>,
+}
+
+#[derive(Clone)]
 pub struct UnwrapOk<I, V, E>
 {
     iter: I,
     dummy_value: marker::PhantomData<V>,
     dummy_error: marker::PhantomData<E>,
+}
+
+#[derive(Clone)]
+pub struct DecodeImage<I>
+{
+    formats: HashMap<String, Option<ImageFormat>>,
+    iter: I,
 }
 
 pub struct LoadByTfRecordIndex<I>
@@ -113,6 +155,10 @@ pub struct LoadByTfRecordIndex<I>
 }
 
 // impl
+
+impl<T> DsIterator for T where
+    T: Iterator,
+{}
 
 impl<I> Iterator for IntoTfExample<I> where
     I: Iterator<Item=Vec<u8>>,
@@ -184,10 +230,6 @@ impl<I> Iterator for IntoTfExample<I> where
     }
 }
 
-impl<I> DsIterator for IntoTfExample<I> where
-    I: Iterator<Item=Vec<u8>>,
-{}
-
 impl<I> Iterator for IntoTorchTensor<I> where
     I: Iterator<Item=FeatureDict>
 {
@@ -249,11 +291,6 @@ impl<I> Iterator for IntoTorchTensor<I> where
         }
     }
 }
-
-impl<I> DsIterator for IntoTorchTensor<I> where
-    I: Iterator<Item=FeatureDict>
-{}
-
 
 // TODO: implementation
 
@@ -318,10 +355,6 @@ impl<I> DsIterator for IntoTorchTensor<I> where
 //     }
 // }
 
-// impl<I> DsIterator for IntoTfTensor<I> where
-//     I: Iterator<Item=FeatureDict>
-// {}
-
 
 impl<I, K, V> Iterator for FilterHashMapEntry<I, K> where
     I: Iterator<Item=HashMap<K, V>>,
@@ -348,13 +381,22 @@ impl<I, K, V> Iterator for FilterHashMapEntry<I, K> where
     }
 }
 
-impl<I, K, V> DsIterator for FilterHashMapEntry<I, K> where
-    I: Iterator<Item=HashMap<K, V>>,
-    K: hash::Hash + cmp::Eq
-{}
-
-
 impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
+    I: Iterator<Item=Result<V, E>>,
+{
+    type Item = V;
+
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        match self.iter.next()
+        {
+            None => None,
+            Some(result) => Some(result.ok().unwrap())
+        }
+    }
+}
+
+impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
     E: error::Error,
 {
@@ -369,12 +411,6 @@ impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
         }
     }
 }
-
-impl<I, V, E> DsIterator for UnwrapOk<I, V, E> where
-    I: Iterator<Item=Result<V, E>>,
-    E: error::Error,
-{}
-
 
 impl<I> Iterator for LoadByTfRecordIndex<I> where
     I: Iterator<Item=loader::RecordIndex>,
@@ -394,6 +430,216 @@ impl<I> Iterator for LoadByTfRecordIndex<I> where
     }
 }
 
-impl<I> DsIterator for LoadByTfRecordIndex<I> where
-    I: Iterator<Item=loader::RecordIndex>,
-{}
+impl<I> Iterator for DecodeImage<I> where
+    I: Iterator<Item=FeatureDict>,
+{
+    type Item = Result<FeatureDict, Box<error::Error>>;
+
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        match self.iter.next()
+        {
+            None => None,
+            Some(mut example) => {
+                for (query_name, format_opt) in &self.formats
+                {
+
+                    let mut entry = match example.entry(query_name.to_owned())
+                    {
+                        hash_map::Entry::Vacant(entry) => {
+                            let name = entry.key();
+                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", name));
+                            return Some(Err(Box::new(err)));
+                        }
+                        hash_map::Entry::Occupied(entry) => entry
+                    };
+                    let (format, bytes_list) = match entry.get_mut() {
+                        Feature::BytesList(bytes_list) => {
+                            if bytes_list.is_empty()
+                            {
+                                let name = entry.key();
+                                let err = ParseError::new(&format!("Cannot decode empty bytes list feature with name \"{}\"", name));
+                                return Some(Err(Box::new(err)));
+                            }
+
+                            match format_opt
+                            {
+                                Some(format) => (format.to_owned(), bytes_list),
+                                None => {
+                                    match image::guess_format(&bytes_list[0])
+                                    {
+                                        Ok(format) => (format, bytes_list),
+                                        Err(e) => return Some(Err(Box::new(e))),
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            let name = entry.key();
+                            let err = ParseError::new(&format!("Cannot decode non bytes list feature with name \"{}\"", name));
+                            return Some(Err(Box::new(err)));
+                        }
+                    };
+
+                    let mut images = Vec::new();
+                    match format
+                    {
+                        ImageFormat::PNG => {
+                            for bytes in bytes_list
+                            {
+                                match PNGDecoder::new(bytes.as_slice())
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::JPEG => {
+                            for bytes in bytes_list
+                            {
+                                match JPEGDecoder::new(bytes.as_slice())
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::GIF => {
+                            for bytes in bytes_list
+                            {
+                                match GIFDecoder::new(bytes.as_slice())
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::WEBP => {
+                            for bytes in bytes_list
+                            {
+                                match WebpDecoder::new(bytes.as_slice())
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::PNM => {
+                            for bytes in bytes_list
+                            {
+                                match PNMDecoder::new(bytes.as_slice())
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::TIFF => {
+                            for bytes in bytes_list
+                            {
+                                match TIFFDecoder::new(io::Cursor::new(&bytes))
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::TGA => {
+                            for bytes in bytes_list
+                            {
+                                match TGADecoder::new(io::Cursor::new(&bytes))
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::BMP => {
+                            for bytes in bytes_list
+                            {
+                                match BMPDecoder::new(io::Cursor::new(&bytes))
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        ImageFormat::ICO => {
+                            for bytes in bytes_list
+                            {
+                                match ICODecoder::new(io::Cursor::new(&bytes))
+                                {
+                                    Ok(decoder) => {
+                                        match decoder.read_image()
+                                        {
+                                            Ok(image) => images.push(image),
+                                            Err(e) => return Some(Err(Box::new(e))),
+                                        }
+                                    },
+                                    Err(e) => return Some(Err(Box::new(e))),
+                                }
+                            }
+                        }
+                        _ => {
+                            let name = entry.key();
+                            let err = ParseError::new(&format!("Image format is not supported for feature with name \"{}\"", name));
+                            return Some(Err(Box::new(err)));
+                        }
+                    };
+
+                    entry.insert(Feature::ImageList(images));
+                }
+
+                Some(Ok(example))
+            }
+        }
+    }
+}
