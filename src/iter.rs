@@ -714,16 +714,15 @@ impl<I> Iterator for Shuffle<I> where
                 match self.iter.next()
                 {
                     None => break,
-                    Some(item) => self.buffer.push_back(item),
+                    Some(item) => {
+                        self.buffer.push_front(item);
+                        let buf_len = self.buffer.len();
+                        let swap_ind = self.rng.gen_range(0, buf_len);
+                        self.buffer.swap(0, swap_ind);
+                    }
                 }
             }
 
-            let buf_len = self.buffer.len();
-            for ind in 0..buf_len
-            {
-                let swap_ind = self.rng.gen_range(ind, buf_len);
-                self.buffer.swap(ind, swap_ind);
-            }
             self.buffer.pop_back()
         }
         else
