@@ -13,7 +13,7 @@ use image::tga::TGADecoder;
 use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
 use rand::prelude::*;
-use ndarray::{ArrayBase, Array3, StrideShape};
+use ndarray::{ArrayBase, Array2, Array3};
 
 // use tensorflow as tf;
 use crate::parser;
@@ -133,6 +133,15 @@ pub enum Feature
     // BytesSeqList(Vec<Vec<Vec<u8>>>),
     // F32SeqList(Vec<Vec<f32>>),
     // I64SeqList(Vec<Vec<i64>>),
+    Array2U8(Array2<u8>),
+    Array2F32(Array2<f32>),
+    Array2F64(Array2<f64>),
+    Array3U8(Array3<u8>),
+    Array3F32(Array3<f32>),
+    Array3F64(Array3<f64>),
+    Array2U8List(Vec<Array2<u8>>),
+    Array2F32List(Vec<Array2<f32>>),
+    Array2F64List(Vec<Array2<f64>>),
     Array3U8List(Vec<Array3<u8>>),
     Array3F32List(Vec<Array3<f32>>),
     Array3F64List(Vec<Array3<f64>>),
@@ -343,6 +352,105 @@ impl<I> Iterator for IntoTorchTensor<I> where
                             }
                             Feature::I64List(val) => {
                                 (key, Feature::TorchTensor(tch::Tensor::of_slice(&val)))
+                            }
+                            Feature::Array2U8(array) => {
+                                let shape: Vec<_> = array.shape()
+                                    .iter()
+                                    .map(|dim| *dim as i64)
+                                    .collect();
+                                let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                tensor.view(&shape);
+                                (key, Feature::TorchTensor(tensor))
+                            }
+                            Feature::Array2F32(array) => {
+                                let shape: Vec<_> = array.shape()
+                                    .iter()
+                                    .map(|dim| *dim as i64)
+                                    .collect();
+                                let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                tensor.view(&shape);
+                                (key, Feature::TorchTensor(tensor))
+                            }
+                            Feature::Array2F64(array) => {
+                                let shape: Vec<_> = array.shape()
+                                    .iter()
+                                    .map(|dim| *dim as i64)
+                                    .collect();
+                                let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                tensor.view(&shape);
+                                (key, Feature::TorchTensor(tensor))
+                            }
+                            Feature::Array3U8(array) => {
+                                let shape: Vec<_> = array.shape()
+                                    .iter()
+                                    .map(|dim| *dim as i64)
+                                    .collect();
+                                let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                tensor.view(&shape);
+                                (key, Feature::TorchTensor(tensor))
+                            }
+                            Feature::Array3F32(array) => {
+                                let shape: Vec<_> = array.shape()
+                                    .iter()
+                                    .map(|dim| *dim as i64)
+                                    .collect();
+                                let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                tensor.view(&shape);
+                                (key, Feature::TorchTensor(tensor))
+                            }
+                            Feature::Array3F64(array) => {
+                                let shape: Vec<_> = array.shape()
+                                    .iter()
+                                    .map(|dim| *dim as i64)
+                                    .collect();
+                                let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                tensor.view(&shape);
+                                (key, Feature::TorchTensor(tensor))
+                            }
+                            Feature::Array2U8List(list) => {
+                                let tensor_list: Vec<_> = list.into_iter()
+                                    .map(|array| {
+                                        let shape: Vec<_> = array.shape()
+                                            .iter()
+                                            .map(|dim| *dim as i64)
+                                            .collect();
+
+                                        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                        tensor.view(&shape);
+                                        tensor
+                                    })
+                                    .collect();
+                                (key, Feature::TorchTensorList(tensor_list))
+                            }
+                            Feature::Array2F32List(list) => {
+                                let tensor_list: Vec<_> = list.into_iter()
+                                    .map(|array| {
+                                        let shape: Vec<_> = array.shape()
+                                            .iter()
+                                            .map(|dim| *dim as i64)
+                                            .collect();
+
+                                        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                        tensor.view(&shape);
+                                        tensor
+                                    })
+                                    .collect();
+                                (key, Feature::TorchTensorList(tensor_list))
+                            }
+                            Feature::Array2F64List(list) => {
+                                let tensor_list: Vec<_> = list.into_iter()
+                                    .map(|array| {
+                                        let shape: Vec<_> = array.shape()
+                                            .iter()
+                                            .map(|dim| *dim as i64)
+                                            .collect();
+
+                                        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                        tensor.view(&shape);
+                                        tensor
+                                    })
+                                    .collect();
+                                (key, Feature::TorchTensorList(tensor_list))
                             }
                             Feature::Array3U8List(list) => {
                                 let tensor_list: Vec<_> = list.into_iter()
