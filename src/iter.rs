@@ -359,8 +359,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                     .map(|dim| *dim as i64)
                                     .collect();
                                 let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-                                tensor.view(&shape);
-                                (key, Feature::TorchTensor(tensor))
+                                (key, Feature::TorchTensor(tensor.view(&shape)))
                             }
                             Feature::Array2F32(array) => {
                                 let shape: Vec<_> = array.shape()
@@ -369,7 +368,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                     .collect();
                                 let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
                                 tensor.view(&shape);
-                                (key, Feature::TorchTensor(tensor))
+                                (key, Feature::TorchTensor(tensor.view(&shape)))
                             }
                             Feature::Array2F64(array) => {
                                 let shape: Vec<_> = array.shape()
@@ -378,7 +377,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                     .collect();
                                 let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
                                 tensor.view(&shape);
-                                (key, Feature::TorchTensor(tensor))
+                                (key, Feature::TorchTensor(tensor.view(&shape)))
                             }
                             Feature::Array3U8(array) => {
                                 let shape: Vec<_> = array.shape()
@@ -387,7 +386,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                     .collect();
                                 let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
                                 tensor.view(&shape);
-                                (key, Feature::TorchTensor(tensor))
+                                (key, Feature::TorchTensor(tensor.view(&shape)))
                             }
                             Feature::Array3F32(array) => {
                                 let shape: Vec<_> = array.shape()
@@ -396,7 +395,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                     .collect();
                                 let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
                                 tensor.view(&shape);
-                                (key, Feature::TorchTensor(tensor))
+                                (key, Feature::TorchTensor(tensor.view(&shape)))
                             }
                             Feature::Array3F64(array) => {
                                 let shape: Vec<_> = array.shape()
@@ -405,7 +404,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                     .collect();
                                 let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
                                 tensor.view(&shape);
-                                (key, Feature::TorchTensor(tensor))
+                                (key, Feature::TorchTensor(tensor.view(&shape)))
                             }
                             Feature::Array2U8List(list) => {
                                 let tensor_list: Vec<_> = list.into_iter()
@@ -416,8 +415,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                             .collect();
 
                                         let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-                                        tensor.view(&shape);
-                                        tensor
+                                        tensor.view(&shape)
                                     })
                                     .collect();
                                 (key, Feature::TorchTensorList(tensor_list))
@@ -431,8 +429,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                             .collect();
 
                                         let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-                                        tensor.view(&shape);
-                                        tensor
+                                        tensor.view(&shape)
                                     })
                                     .collect();
                                 (key, Feature::TorchTensorList(tensor_list))
@@ -446,8 +443,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                             .collect();
 
                                         let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-                                        tensor.view(&shape);
-                                        tensor
+                                        tensor.view(&shape)
                                     })
                                     .collect();
                                 (key, Feature::TorchTensorList(tensor_list))
@@ -461,8 +457,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                             .collect();
 
                                         let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-                                        tensor.view(&shape);
-                                        tensor
+                                        tensor.view(&shape)
                                     })
                                     .collect();
                                 (key, Feature::TorchTensorList(tensor_list))
@@ -476,8 +471,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                             .collect();
 
                                         let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-                                        tensor.view(&shape);
-                                        tensor
+                                        tensor.view(&shape)
                                     })
                                     .collect();
                                 (key, Feature::TorchTensorList(tensor_list))
@@ -491,8 +485,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
                                             .collect();
 
                                         let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-                                        tensor.view(&shape);
-                                        tensor
+                                        tensor.view(&shape)
                                     })
                                     .collect();
                                 (key, Feature::TorchTensorList(tensor_list))
