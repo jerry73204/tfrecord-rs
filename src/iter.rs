@@ -13,6 +13,7 @@ use image::tga::TGADecoder;
 use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
 use rand::prelude::*;
+use ndarray::{ArrayBase, Array3, StrideShape};
 
 // use tensorflow as tf;
 use crate::parser;
@@ -41,11 +42,12 @@ pub trait DsIterator: Iterator
         }
     }
 
-    fn into_torch_tensor(self) -> IntoTorchTensor<Self> where
+    fn into_torch_tensor(self, names: Option<HashSet<String>>) -> IntoTorchTensor<Self> where
         Self: Sized
     {
         IntoTorchTensor {
             iter: self,
+            names,
         }
     }
 
@@ -128,10 +130,14 @@ pub enum Feature
     BytesList(Vec<Vec<u8>>),
     F32List(Vec<f32>),
     I64List(Vec<i64>),
-    BytesSeqList(Vec<Vec<Vec<u8>>>),
-    F32SeqList(Vec<Vec<f32>>),
-    I64SeqList(Vec<Vec<i64>>),
-    ImageList(Vec<Vec<u8>>),
+    // BytesSeqList(Vec<Vec<Vec<u8>>>),
+    // F32SeqList(Vec<Vec<f32>>),
+    // I64SeqList(Vec<Vec<i64>>),
+    Array3U8List(Vec<Array3<u8>>),
+    Array3F32List(Vec<Array3<f32>>),
+    Array3F64List(Vec<Array3<f64>>),
+    TorchTensor(tch::Tensor),
+    TorchTensorList(Vec<tch::Tensor>),
 }
 
 pub enum FeatureShape<'a>
@@ -151,6 +157,7 @@ pub struct IntoTfExample<I>
 pub struct IntoTorchTensor<I>
 {
     iter: I,
+    names: Option<HashSet<String>>,
 }
 
 #[derive(Clone)]
@@ -289,60 +296,107 @@ impl<I> Iterator for IntoTfExample<I> where
 impl<I> Iterator for IntoTorchTensor<I> where
     I: Iterator<Item=FeatureDict>
 {
-    type Item = Result<HashMap<String, tch::Tensor>, ParseError>;
+    type Item = Result<FeatureDict, Box<error::Error>>;
 
     fn next(&mut self) -> Option<Self::Item>
     {
         match self.iter.next()
         {
             None => None,
-            Some(example) => {
-                let tensor_map_result: Result<_, _> = example.into_iter()
-                    .map(|(name, value)| {
-                        // TODO: correctly convert values
-                        let result = match value
+            Some(mut example) => {
+                let entries: Vec<_> = match &self.names
+                {
+                    Some(names) => {
+                        let mut entries = Vec::new();
+
+                        for key in names
                         {
-                            // Feature::BytesList(val) => {
-                            //     Err(ParseError::new("Cannot convert BytesList to tch::Tensor. Consider using decode_image()"))
-                            // }
+                            let entry = match example.remove_entry(key)
+                            {
+                                Some(entry) => entry,
+                                None => {
+                                    let err = ParseError::new(&format!("Name \"{}\" is not found in example", key));
+                                    return Some(Err(Box::new(err)));
+                                }
+                            };
+                            let (new_key, new_val) = entry;
+                            entries.push((new_key, new_val));
+                        }
+                        entries
+                    }
+                    None => example.into_iter().collect(),
+                };
+
+                let new_example: HashMap<_, _> = entries.into_iter()
+                    .map(|(key, feature)| {
+                        match feature
+                        {
+                            Feature::BytesList(list) => {
+                                let tensor_list: Vec<_> = list.into_iter()
+                                    .map(|bytes| {
+                                        tch::Tensor::of_slice(&bytes)
+                                    }).collect();
+                                (key, Feature::TorchTensorList(tensor_list))
+                            }
                             Feature::F32List(val) => {
-                                Ok(tch::Tensor::of_slice(&val))
+                                (key, Feature::TorchTensor(tch::Tensor::of_slice(&val)))
                             }
                             Feature::I64List(val) => {
-                                Ok(tch::Tensor::of_slice(&val))
+                                (key, Feature::TorchTensor(tch::Tensor::of_slice(&val)))
                             }
-                            // Feature::BytesSeqList(val) => {
-                            //     Err(ParseError::new("Cannot convert BytesList to tch::Tensor. Consider using decode_image()"))
-                            // }
-                            // Feature::F32SeqList(val) => {
-                            //     Ok(tch::Tensor::of_slice(&val))
-                            // }
-                            // Feature::I64SeqList(val) => {
-                            //     Ok(tch::Tensor::of_slice(&val))
-                            // }
-                            _ => Err(ParseError::new("Cannot convert BytesList to tch::Tensor. Consider using decode_image()")),
-                        };
+                            Feature::Array3U8List(list) => {
+                                let tensor_list: Vec<_> = list.into_iter()
+                                    .map(|array| {
+                                        let shape: Vec<_> = array.shape()
+                                            .iter()
+                                            .map(|dim| *dim as i64)
+                                            .collect();
 
-                        (name, result)
-                    })
-                    .fold(Ok(HashMap::new()), |overall_result, (name, result)| {
-                        match overall_result
-                        {
-                            Err(e) => Err(e),
-                            Ok(mut acc) => {
-                                match result
-                                {
-                                    Err(e) => Err(e),
-                                    Ok(tensor) => {
-                                        acc.insert(name, tensor);
-                                        Ok(acc)
-                                    }
-                                }
+                                        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                        tensor.view(&shape);
+                                        tensor
+                                    })
+                                    .collect();
+                                (key, Feature::TorchTensorList(tensor_list))
                             }
+                            Feature::Array3F32List(list) => {
+                                let tensor_list: Vec<_> = list.into_iter()
+                                    .map(|array| {
+                                        let shape: Vec<_> = array.shape()
+                                            .iter()
+                                            .map(|dim| *dim as i64)
+                                            .collect();
+
+                                        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                        tensor.view(&shape);
+                                        tensor
+                                    })
+                                    .collect();
+                                (key, Feature::TorchTensorList(tensor_list))
+                            }
+                            Feature::Array3F64List(list) => {
+                                let tensor_list: Vec<_> = list.into_iter()
+                                    .map(|array| {
+                                        let shape: Vec<_> = array.shape()
+                                            .iter()
+                                            .map(|dim| *dim as i64)
+                                            .collect();
+
+                                        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
+                                        tensor.view(&shape);
+                                        tensor
+                                    })
+                                    .collect();
+                                (key, Feature::TorchTensorList(tensor_list))
+                            }
+                            Feature::TorchTensor(tensor) => (key, Feature::TorchTensor(tensor)),
+                            Feature::TorchTensorList(list) => (key, Feature::TorchTensorList(list)),
                         }
-                    });
+                    })
+                    .collect();
 
-                Some(tensor_map_result)
+
+                Some(Ok(new_example))
             }
         }
     }
@@ -454,7 +508,7 @@ impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
 
 impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
-    E: error::Error,
+    E: std::fmt::Debug,
 {
     type Item = V;
 
@@ -546,9 +600,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match PNGDecoder::new(bytes.as_slice())
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -562,9 +617,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match JPEGDecoder::new(bytes.as_slice())
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -578,9 +634,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match GIFDecoder::new(bytes.as_slice())
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -594,9 +651,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match WebpDecoder::new(bytes.as_slice())
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -610,9 +668,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match PNMDecoder::new(bytes.as_slice())
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -626,9 +685,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match TIFFDecoder::new(io::Cursor::new(&bytes))
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -642,9 +702,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match TGADecoder::new(io::Cursor::new(&bytes))
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -658,9 +719,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match BMPDecoder::new(io::Cursor::new(&bytes))
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -674,9 +736,10 @@ impl<I> Iterator for DecodeImage<I> where
                                 match ICODecoder::new(io::Cursor::new(&bytes))
                                 {
                                     Ok(decoder) => {
+                                        let dimensions = decoder.dimensions();
                                         match decoder.read_image()
                                         {
-                                            Ok(image) => images.push(image),
+                                            Ok(image) => images.push((image, dimensions)),
                                             Err(e) => return Some(Err(Box::new(e))),
                                         }
                                     },
@@ -691,7 +754,20 @@ impl<I> Iterator for DecodeImage<I> where
                         }
                     };
 
-                    entry.insert(Feature::ImageList(images));
+
+                    let mut arrays = Vec::new();
+                    for (image, dims) in images
+                    {
+                        let (width, height) = dims;
+                        let shape = (width as usize, height as usize, 3);
+
+                        match Array3::from_shape_vec(shape, image)
+                        {
+                            Ok(array) => arrays.push(array),
+                            Err(err) => return Some(Err(Box::new(err))),
+                        }
+                    }
+                    entry.insert(Feature::Array3U8List(arrays));
                 }
 
                 Some(Ok(example))

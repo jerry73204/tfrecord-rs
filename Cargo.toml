@@ -16,6 +16,7 @@ rayon = "1.0"
 lru = "0.1.15"
 image = "0.21.1"
 rand = "0.6.5"
+ndarray = "0.12.1"
 
 [dev-dependencies]
 maplit = "1.0.1"
