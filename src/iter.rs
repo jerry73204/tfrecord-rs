@@ -123,7 +123,7 @@ pub trait DsIterator: Iterator
 
 // Struct definitions
 
-type FeatureDict = HashMap<String, Feature>;
+pub type FeatureDict = HashMap<String, Feature>;
 
 pub enum Feature
 {
