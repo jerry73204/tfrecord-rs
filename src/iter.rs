@@ -19,7 +19,7 @@ use image::tga::TGADecoder;
 use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
 use rand::prelude::*;
-use ndarray::{ArrayBase, Array2, Array3, Array4, ArrayView2, ArrayView3, ArrayView4};
+use ndarray::{ArrayBase, Array1, Array2, Array3, Array4, ArrayView1, ArrayView2, ArrayView3, ArrayView4};
 use crossbeam::channel::Receiver;
 // use tensorflow as tf;
 use crate::parser;
@@ -347,6 +347,12 @@ impl<I, S> ToTorchTensor<I, S> where
         try_convert_vec_vec_to_torch!(value_ref, i32);
         try_convert_vec_vec_to_torch!(value_ref, i64);
 
+        try_convert_array_to_torch!(value_ref, Array1<u8>);
+        try_convert_array_to_torch!(value_ref, Array1<f32>);
+        try_convert_array_to_torch!(value_ref, Array1<f64>);
+        try_convert_array_to_torch!(value_ref, Array1<i32>);
+        try_convert_array_to_torch!(value_ref, Array1<i64>);
+
         try_convert_array_to_torch!(value_ref, Array2<u8>);
         try_convert_array_to_torch!(value_ref, Array2<f32>);
         try_convert_array_to_torch!(value_ref, Array2<f64>);
@@ -364,6 +370,12 @@ impl<I, S> ToTorchTensor<I, S> where
         try_convert_array_to_torch!(value_ref, Array4<f64>);
         try_convert_array_to_torch!(value_ref, Array4<i32>);
         try_convert_array_to_torch!(value_ref, Array4<i64>);
+
+        try_convert_array_vec_to_torch!(value_ref, Array1<u8>);
+        try_convert_array_vec_to_torch!(value_ref, Array1<f32>);
+        try_convert_array_vec_to_torch!(value_ref, Array1<f64>);
+        try_convert_array_vec_to_torch!(value_ref, Array1<i32>);
+        try_convert_array_vec_to_torch!(value_ref, Array1<i64>);
 
         try_convert_array_vec_to_torch!(value_ref, Array2<u8>);
         try_convert_array_vec_to_torch!(value_ref, Array2<f32>);
@@ -383,6 +395,11 @@ impl<I, S> ToTorchTensor<I, S> where
         try_convert_array_vec_to_torch!(value_ref, Array4<i32>);
         try_convert_array_vec_to_torch!(value_ref, Array4<i64>);
 
+        try_convert_array_to_torch!(value_ref, ArrayView1<u8>);
+        try_convert_array_to_torch!(value_ref, ArrayView1<f32>);
+        try_convert_array_to_torch!(value_ref, ArrayView1<f64>);
+        try_convert_array_to_torch!(value_ref, ArrayView1<i32>);
+        try_convert_array_to_torch!(value_ref, ArrayView1<i64>);
 
         try_convert_array_to_torch!(value_ref, ArrayView2<u8>);
         try_convert_array_to_torch!(value_ref, ArrayView2<f32>);
@@ -401,6 +418,12 @@ impl<I, S> ToTorchTensor<I, S> where
         try_convert_array_to_torch!(value_ref, ArrayView4<f64>);
         try_convert_array_to_torch!(value_ref, ArrayView4<i32>);
         try_convert_array_to_torch!(value_ref, ArrayView4<i64>);
+
+        try_convert_array_vec_to_torch!(value_ref, ArrayView1<u8>);
+        try_convert_array_vec_to_torch!(value_ref, ArrayView1<f32>);
+        try_convert_array_vec_to_torch!(value_ref, ArrayView1<f64>);
+        try_convert_array_vec_to_torch!(value_ref, ArrayView1<i32>);
+        try_convert_array_vec_to_torch!(value_ref, ArrayView1<i64>);
 
         try_convert_array_vec_to_torch!(value_ref, ArrayView2<u8>);
         try_convert_array_vec_to_torch!(value_ref, ArrayView2<f32>);
@@ -851,9 +874,10 @@ impl<I> Iterator for Shuffle<I> where
 }
 
 impl<I> Iterator for Prefetch<I> where
-    I: Iterator,
-{
+    I: Iterator, {
+
     type Item = I::Item;
+
     fn next(&mut self) -> Option<Self::Item>
     {
         match self.worker_opt {
