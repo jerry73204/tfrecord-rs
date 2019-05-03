@@ -6,6 +6,7 @@ extern crate tch;
 extern crate glob;
 extern crate rayon;
 extern crate lru;
+extern crate crossbeam;
 
 mod from_tf;
 pub mod loader;

@@ -1,4 +1,5 @@
 use std::io;
+use std::thread::{self, JoinHandle};
 use std::cmp::Eq;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -19,6 +20,7 @@ use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
 use rand::prelude::*;
 use ndarray::{ArrayBase, Array2, Array3, Array4};
+use crossbeam::channel::Receiver;
 // use tensorflow as tf;
 use crate::parser;
 use crate::loader;
@@ -101,17 +103,32 @@ pub trait DsIterator: Iterator
         }
     }
 
-    // TODO
-    // fn prefetch(self, buf_size: usize) -> Prefetch<Self> where
-    //     Self: Sized + Iterator,
-    // {
-    //     let buffer = Vec::with_capacity(buf_size);
+    fn prefetch(mut self, buf_size: usize) -> Prefetch<Self> where
+        Self: 'static + Sized + Iterator + Sync + Send,
+        Self::Item: 'static + Send + Sync,
+    {
+        let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
-    //     Prefetch {
-    //         iter: self,
-    //         buffer,
-    //     }
-    // }
+        let worker = thread::spawn(move ||{
+            loop {
+                match self.next() {
+                    None => {
+                        sender.send(None).unwrap();
+                        return;
+                    }
+                    Some(val) => {
+                        sender.send(Some(val)).unwrap();
+                    }
+                }
+            }
+        });
+
+        Prefetch {
+            eos: false,
+            worker_opt: Some(worker),
+            receiver,
+        }
+    }
 
     fn load_by_tfrecord_index(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> where
         Self: Sized
@@ -183,12 +200,12 @@ pub struct Shuffle<I: Iterator>
     rng: rand::rngs::ThreadRng,
 }
 
-// #[derive(Clone)]
-// pub struct Prefetch<I: Iterator>
-// {
-//     iter: I,
-//     buffer: Vec<I::Item>,
-// }
+pub struct Prefetch<I: Iterator>
+{
+    eos: bool,
+    receiver: Receiver<Option<I::Item>>,
+    worker_opt: Option<JoinHandle<()>>,
+}
 
 pub struct LoadByTfRecordIndex<I>
 {
@@ -797,12 +814,24 @@ impl<I> Iterator for Shuffle<I> where
     }
 }
 
-// TODO
-// impl<I> Iterator for Prefetch<I> where
-//     I: Iterator,
-// {
-//     type Item = I::Item;
-//     fn next(&mut self) -> Option<Self::Item>
-//     {
-//     }
-// }
+impl<I> Iterator for Prefetch<I> where
+    I: Iterator,
+{
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item>
+    {
+        match self.worker_opt {
+            None => return None,
+            _ => {}
+        }
+
+        match self.receiver.recv().unwrap() {
+            None => {
+                let worker = self.worker_opt.take().unwrap();
+                worker.join().unwrap();
+                None
+            }
+            Some(val) => Some(val),
+        }
+    }
+}
