@@ -1,21 +1,15 @@
 use std::io;
 use std::io::{Seek, Read, BufReader};
-use std::iter;
 use std::vec;
-use std::marker;
-use std::slice;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::fs;
 use std::fs::File;
 use std::error;
-use std::ops;
 use crc::crc32;
 use byteorder::{ReadBytesExt, LittleEndian};
 use rayon::prelude::*;
-use crate::iter::DsIterator;
 use crate::error::{make_checksum_error, make_truncated_error, make_loader_error};
 
 // Helper functions

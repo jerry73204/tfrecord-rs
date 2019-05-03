@@ -1,4 +1,3 @@
-use std::error;
 use std::io;
 use std::collections::HashMap;
 use crate::from_tf::example;

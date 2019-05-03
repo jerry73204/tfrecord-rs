@@ -1,6 +1,11 @@
-use std::{io, ops, error, hash, cmp, marker, collections::hash_map};
+use std::io;
+use std::cmp::Eq;
+use std::hash::Hash;
+use std::marker::PhantomData;
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
+use std::any::Any;
+use std::fmt::{Debug, Display};
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
@@ -14,7 +19,6 @@ use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
 use rand::prelude::*;
 use ndarray::{ArrayBase, Array2, Array3, Array4};
-
 // use tensorflow as tf;
 use crate::parser;
 use crate::loader;
@@ -24,37 +28,35 @@ use crate::error::{ParseError, make_load_index_error};
 
 pub trait DsIterator: Iterator
 {
-    fn into_tf_example(self, names: Option<HashSet<String>>) -> IntoTfExample<Self> where
-        Self: Sized
-    {
-        IntoTfExample {
+    fn to_tf_example(self, names_opt: Option<HashSet<&str>>) -> ToTfExample<Self, &str> where
+        Self: Sized {
+        ToTfExample {
             iter: self,
-            names,
+            names_opt,
         }
     }
 
-    fn decode_image(self, formats: HashMap<String, Option<ImageFormat>>) -> DecodeImage<Self> where
-        Self: Sized
-    {
+    fn decode_image<S>(self, formats_opt: Option<HashMap<S, Option<ImageFormat>>>) -> DecodeImage<Self, S> where
+        Self: Sized {
         DecodeImage {
             iter: self,
-            formats,
+            formats_opt,
         }
     }
 
-    fn into_torch_tensor(self, names: Option<HashSet<String>>) -> IntoTorchTensor<Self> where
-        Self: Sized
-    {
-        IntoTorchTensor {
+    fn to_torch_tensor(self, names_opt: Option<HashSet<&str>>) -> ToTorchTensor<Self, &str> where
+        Self: Sized, {
+        ToTorchTensor {
             iter: self,
-            names,
+            names_opt,
+            dummy_name: PhantomData,
         }
     }
 
-    fn into_tf_tensor(self) -> IntoTfTensor<Self> where
+    fn to_tf_tensor(self) -> ToTfTensor<Self> where
         Self: Sized
     {
-        IntoTfTensor {
+        ToTfTensor {
             iter: self,
         }
     }
@@ -71,8 +73,8 @@ pub trait DsIterator: Iterator
     {
         UnwrapResult {
             iter: self,
-            dummy_value: marker::PhantomData,
-            dummy_error: marker::PhantomData,
+            dummy_value: PhantomData,
+            dummy_error: PhantomData,
         }
     }
 
@@ -81,8 +83,8 @@ pub trait DsIterator: Iterator
     {
         UnwrapOk {
             iter: self,
-            dummy_value: marker::PhantomData,
-            dummy_error: marker::PhantomData,
+            dummy_value: PhantomData,
+            dummy_error: PhantomData,
         }
     }
 
@@ -123,68 +125,22 @@ pub trait DsIterator: Iterator
 
 // Struct definitions
 
-pub type FeatureDict = HashMap<String, Feature>;
-
-pub enum Feature
-{
-    BytesList(Vec<Vec<u8>>),
-    F32List(Vec<f32>),
-    I64List(Vec<i64>),
-
-    // BytesSeqList(Vec<Vec<Vec<u8>>>),
-    // F32SeqList(Vec<Vec<f32>>),
-    // I64SeqList(Vec<Vec<i64>>),
-
-    Array2U8(Array2<u8>),
-    Array2F32(Array2<f32>),
-    Array2F64(Array2<f64>),
-
-    Array3U8(Array3<u8>),
-    Array3F32(Array3<f32>),
-    Array3F64(Array3<f64>),
-
-    Array4U8(Array4<u8>),
-    Array4F32(Array4<f32>),
-    Array4F64(Array4<f64>),
-
-    Array2U8List(Vec<Array2<u8>>),
-    Array2F32List(Vec<Array2<f32>>),
-    Array2F64List(Vec<Array2<f64>>),
-
-    Array3U8List(Vec<Array3<u8>>),
-    Array3F32List(Vec<Array3<f32>>),
-    Array3F64List(Vec<Array3<f64>>),
-
-    Array4U8List(Vec<Array4<u8>>),
-    Array4F32List(Vec<Array4<f32>>),
-    Array4F64List(Vec<Array4<f64>>),
-
-    TorchTensor(tch::Tensor),
-    TorchTensorList(Vec<tch::Tensor>),
-}
-
-pub enum FeatureShape<'a>
-{
-    Fixed(Vec<i64>),
-    FixedRef(&'a [i64]),
-}
-
 #[derive(Clone)]
-pub struct IntoTfExample<I>
+pub struct ToTfExample<I, S>
 {
-    names: Option<HashSet<String>>,
+    names_opt: Option<HashSet<S>>,
     iter: I,
 }
 
-#[derive(Clone)]
-pub struct IntoTorchTensor<I>
+pub struct ToTorchTensor<I, S>
 {
     iter: I,
-    names: Option<HashSet<String>>,
+    names_opt: Option<HashSet<S>>,
+    dummy_name: PhantomData<S>,
 }
 
 #[derive(Clone)]
-pub struct IntoTfTensor<I>
+pub struct ToTfTensor<I>
 {
     iter: I,
 }
@@ -200,22 +156,22 @@ pub struct FilterHashMapEntry<I, K>
 pub struct UnwrapResult<I, V, E>
 {
     iter: I,
-    dummy_value: marker::PhantomData<V>,
-    dummy_error: marker::PhantomData<E>,
+    dummy_value: PhantomData<V>,
+    dummy_error: PhantomData<E>,
 }
 
 #[derive(Clone)]
 pub struct UnwrapOk<I, V, E>
 {
     iter: I,
-    dummy_value: marker::PhantomData<V>,
-    dummy_error: marker::PhantomData<E>,
+    dummy_value: PhantomData<V>,
+    dummy_error: PhantomData<E>,
 }
 
 #[derive(Clone)]
-pub struct DecodeImage<I>
+pub struct DecodeImage<I, S>
 {
-    formats: HashMap<String, Option<ImageFormat>>,
+    formats_opt: Option<HashMap<S, Option<ImageFormat>>>,
     iter: I,
 }
 
@@ -246,254 +202,231 @@ impl<T> DsIterator for T where
     T: Iterator,
 {}
 
-impl<I> Iterator for IntoTfExample<I> where
-    I: Iterator<Item=Vec<u8>>,
-{
-    type Item = Result<FeatureDict, io::Error>;
+impl<I, S> Iterator for ToTfExample<I, S> where
+        I: Iterator<Item=Vec<u8>>,
+        S: AsRef<str> + Hash + Eq + Display, {
+
+    type Item = Result<HashMap<String, Box<dyn Any>>, Box<Debug>>;
 
     fn next(&mut self) -> Option<Self::Item>
     {
-        match self.iter.next()
-        {
-            None => None,
-            Some(buf) => {
-                match self.names
-                {
-                    None => {
-                        match parser::parse_single_example(&buf)
-                        {
-                            Err(e) => Some(Err(e)),
-                            Ok(mut example) => {
-                                let mut converted_example = HashMap::new();
-                                for (name, value) in example.drain()
-                                {
-                                    let new_value = match value
-                                    {
-                                        parser::FeatureList::Bytes(val) =>
-                                            Feature::BytesList(val),
-                                        parser::FeatureList::F32(val) =>
-                                            Feature::F32List(val),
-                                        parser::FeatureList::I64(val) =>
-                                            Feature::I64List(val),
-                                    };
-                                    converted_example.insert(name, new_value);
-                                }
-                                Some(Ok(converted_example))
-                            }
-                        }
-                    }
-                    Some(ref feature_set) => {
-                        match parser::parse_single_example(&buf)
-                        {
-                            Err(e) => Some(Err(e)),
-                            Ok(mut example) => {
-                                let mut filtered_example = HashMap::new();
+        let buf = match self.iter.next() {
+            None => return None,
+            Some(buf) => buf,
+        };
 
-                                for name in feature_set
-                                {
-                                    if let Some(value) = example.remove(name)
-                                    {
-                                        let owned_name = name.to_owned();
-                                        let new_value = match value
-                                        {
-                                            parser::FeatureList::Bytes(val) =>
-                                                Feature::BytesList(val),
-                                            parser::FeatureList::F32(val) =>
-                                                Feature::F32List(val),
-                                            parser::FeatureList::I64(val) =>
-                                                Feature::I64List(val),
-                                        };
-                                        filtered_example.insert(owned_name, new_value);
-                                    }
-                                }
-                                Some(Ok(filtered_example))
-                            }
+        let mut example = match parser::parse_single_example(&buf) {
+            Err(e) => return Some(Err(Box::new(e))),
+            Ok(example) => example,
+        };
+
+        let entries: Vec<_> = match self.names_opt {
+            Some(ref names) => {
+                let mut entries = Vec::new();
+                for name in names {
+                    let entry = match example.remove_entry(name.as_ref()) {
+                        Some(entry) => entry,
+                        None => {
+                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", name));
+                            return Some(Err(Box::new(err)));
                         }
-                    }
+                    };
+                    entries.push(entry);
                 }
+
+                entries
+            }
+            None => example.into_iter().collect()
+        };
+
+        let mut result = HashMap::new();
+
+        for (name, value) in entries {
+            let parsed_value: Box<dyn Any> = match value {
+                parser::FeatureList::Bytes(val) => Box::new(val),
+                parser::FeatureList::F32(val) => Box::new(val),
+                parser::FeatureList::I64(val) => Box::new(val),
+            };
+
+            result.insert(name, parsed_value);
+        }
+
+        Some(Ok(result))
+    }
+}
+
+macro_rules! try_convert_array_to_torch (
+    ( $value_ref:ident, $dtype:ty ) => (
+        match $value_ref.downcast_ref::<$dtype>() {
+            None => {}
+            Some(val) => {
+                let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
+                let tensor = tch::Tensor::of_slice(val.as_slice().unwrap());
+                tensor.view(&dims);
+                return Ok(Box::new(tensor));
             }
         }
-    }
-}
+    )
+);
 
-impl<I> IntoTorchTensor<I> where
-    I: Iterator<Item=FeatureDict> {
-
-    fn arr2tensor_f32<S, D>(array: ArrayBase<S, D>) -> tch::Tensor where
-        S: ndarray::Data<Elem=f32>,
-        D: ndarray::Dimension, {
-        let shape: Vec<_> = array.shape()
-            .iter()
-            .map(|dim| *dim as i64)
-            .collect();
-        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-        tensor.view(&shape)
-    }
-
-    fn arr2tensor_f64<S, D>(array: ArrayBase<S, D>) -> tch::Tensor where
-        S: ndarray::Data<Elem=f64>,
-        D: ndarray::Dimension, {
-        let shape: Vec<_> = array.shape()
-            .iter()
-            .map(|dim| *dim as i64)
-            .collect();
-        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-        tensor.view(&shape)
-    }
-
-    fn arr2tensor_u8<S, D>(array: ArrayBase<S, D>) -> tch::Tensor where
-        S: ndarray::Data<Elem=u8>,
-        D: ndarray::Dimension, {
-        let shape: Vec<_> = array.shape()
-            .iter()
-            .map(|dim| *dim as i64)
-            .collect();
-        let tensor = tch::Tensor::of_slice(array.as_slice().unwrap());
-        tensor.view(&shape)
-    }
-
-    fn arr2tensor_list_f32<S, D>(list: Vec<ArrayBase<S, D>>) -> Vec<tch::Tensor> where
-        S: ndarray::Data<Elem=f32>,
-        D: ndarray::Dimension {
-        list.into_iter()
-            .map(|array| {
-                Self::arr2tensor_f32(array)
-            })
-            .collect::<Vec<_>>()
-    }
-
-    fn arr2tensor_list_f64<S, D>(list: Vec<ArrayBase<S, D>>) -> Vec<tch::Tensor> where
-        S: ndarray::Data<Elem=f64>,
-        D: ndarray::Dimension {
-        list.into_iter()
-            .map(|array| {
-                Self::arr2tensor_f64(array)
-            })
-            .collect::<Vec<_>>()
-    }
-
-    fn arr2tensor_list_u8<S, D>(list: Vec<ArrayBase<S, D>>) -> Vec<tch::Tensor> where
-        S: ndarray::Data<Elem=u8>,
-        D: ndarray::Dimension {
-        list.into_iter()
-            .map(|array| {
-                Self::arr2tensor_u8(array)
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-
-impl<I> Iterator for IntoTorchTensor<I> where
-    I: Iterator<Item=FeatureDict>
-{
-    type Item = Result<FeatureDict, Box<error::Error>>;
-
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        match self.iter.next()
-        {
-            None => None,
-            Some(mut example) => {
-                let entries: Vec<_> = match &self.names
-                {
-                    Some(names) => {
-                        let mut entries = Vec::new();
-
-                        for key in names
-                        {
-                            let entry = match example.remove_entry(key)
-                            {
-                                Some(entry) => entry,
-                                None => {
-                                    let err = ParseError::new(&format!("Name \"{}\" is not found in example", key));
-                                    return Some(Err(Box::new(err)));
-                                }
-                            };
-                            let (new_key, new_val) = entry;
-                            entries.push((new_key, new_val));
-                        }
-                        entries
-                    }
-                    None => example.into_iter().collect(),
-                };
-
-                let new_example: HashMap<_, _> = entries.into_iter()
-                    .map(|(key, feature)| {
-                        match feature
-                        {
-                            Feature::BytesList(list) => {
-                                let tensor_list: Vec<_> = list.into_iter()
-                                    .map(|bytes| {
-                                        tch::Tensor::of_slice(&bytes)
-                                    }).collect();
-                                (key, Feature::TorchTensorList(tensor_list))
-                            }
-                            Feature::F32List(val) =>
-                                (key, Feature::TorchTensor(tch::Tensor::of_slice(&val))),
-                            Feature::I64List(val) =>
-                                (key, Feature::TorchTensor(tch::Tensor::of_slice(&val))),
-
-                            Feature::Array2U8(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_u8(array))),
-                            Feature::Array2F32(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_f32(array))),
-                            Feature::Array2F64(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_f64(array))),
-                            Feature::Array3U8(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_u8(array))),
-                            Feature::Array3F32(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_f32(array))),
-                            Feature::Array3F64(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_f64(array))),
-                            Feature::Array4U8(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_u8(array))),
-                            Feature::Array4F32(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_f32(array))),
-                            Feature::Array4F64(array) =>
-                                (key, Feature::TorchTensor(Self::arr2tensor_f64(array))),
-
-                            Feature::Array2U8List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_u8(list))),
-                            Feature::Array2F32List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_f32(list))),
-                            Feature::Array2F64List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_f64(list))),
-                            Feature::Array3U8List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_u8(list))),
-                            Feature::Array3F32List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_f32(list))),
-                            Feature::Array3F64List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_f64(list))),
-
-                            Feature::Array4U8List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_u8(list))),
-                            Feature::Array4F32List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_f32(list))),
-                            Feature::Array4F64List(list) =>
-                                (key, Feature::TorchTensorList(Self::arr2tensor_list_f64(list))),
-
-                            Feature::TorchTensor(tensor) =>
-                                (key, Feature::TorchTensor(tensor)),
-                            Feature::TorchTensorList(list) =>
-                                (key, Feature::TorchTensorList(list)),
-                        }
+macro_rules! try_convert_array_vec_to_torch (
+    ( $value_ref:ident, $dtype:ty ) => (
+        match $value_ref.downcast_ref::<Vec<$dtype>>() {
+            None => {}
+            Some(list) => {
+                let tensor_list = list.into_iter()
+                    .map(|val| {
+                        let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
+                        let tensor = tch::Tensor::of_slice(val.as_slice().unwrap());
+                        tensor.view(&dims);
+                        tensor
                     })
-                    .collect();
-
-
-                Some(Ok(new_example))
+                    .collect::<Vec<_>>();
+                return Ok(Box::new(tensor_list));
             }
         }
+    )
+);
+
+
+macro_rules! try_convert_vec_to_torch (
+    ( $value_ref:ident, $dtype:ty ) => (
+        match $value_ref.downcast_ref::<Vec<$dtype>>() {
+            None => {}
+            Some(val) => {
+                return Ok(Box::new(tch::Tensor::of_slice(val)));
+            }
+        }
+    )
+);
+
+macro_rules! try_convert_vec_vec_to_torch (
+    ( $value_ref:ident, $dtype:ty ) => (
+        match $value_ref.downcast_ref::<Vec<Vec<$dtype>>>() {
+            None => {}
+            Some(list) => {
+                let tensor_list = list.into_iter()
+                    .map(|val| tch::Tensor::of_slice(val))
+                    .collect::<Vec<_>>();
+                return Ok(Box::new(tensor_list));
+            }
+        }
+    )
+);
+
+impl<I, S> ToTorchTensor<I, S> where
+    S: AsRef<str> {
+
+    fn try_convert_to_tensor(name: &str, value_ref: Box<dyn Any>) -> Result<Box<dyn Any>, Box<dyn Debug>> {
+
+        // TODO: optimize type matching
+        try_convert_vec_to_torch!(value_ref, u8);
+        try_convert_vec_to_torch!(value_ref, f32);
+        try_convert_vec_to_torch!(value_ref, f64);
+        try_convert_vec_to_torch!(value_ref, i32);
+        try_convert_vec_to_torch!(value_ref, i64);
+
+        try_convert_vec_vec_to_torch!(value_ref, u8);
+        try_convert_vec_vec_to_torch!(value_ref, f32);
+        try_convert_vec_vec_to_torch!(value_ref, f64);
+        try_convert_vec_vec_to_torch!(value_ref, i32);
+        try_convert_vec_vec_to_torch!(value_ref, i64);
+
+        try_convert_array_to_torch!(value_ref, Array2<u8>);
+        try_convert_array_to_torch!(value_ref, Array2<f32>);
+        try_convert_array_to_torch!(value_ref, Array2<f64>);
+        try_convert_array_to_torch!(value_ref, Array2<i32>);
+        try_convert_array_to_torch!(value_ref, Array2<i64>);
+
+        try_convert_array_to_torch!(value_ref, Array3<u8>);
+        try_convert_array_to_torch!(value_ref, Array3<f32>);
+        try_convert_array_to_torch!(value_ref, Array3<f64>);
+        try_convert_array_to_torch!(value_ref, Array3<i32>);
+        try_convert_array_to_torch!(value_ref, Array3<i64>);
+
+        try_convert_array_to_torch!(value_ref, Array4<u8>);
+        try_convert_array_to_torch!(value_ref, Array4<f32>);
+        try_convert_array_to_torch!(value_ref, Array4<f64>);
+        try_convert_array_to_torch!(value_ref, Array4<i32>);
+        try_convert_array_to_torch!(value_ref, Array4<i64>);
+
+        try_convert_array_vec_to_torch!(value_ref, Array2<u8>);
+        try_convert_array_vec_to_torch!(value_ref, Array2<f32>);
+        try_convert_array_vec_to_torch!(value_ref, Array2<f64>);
+        try_convert_array_vec_to_torch!(value_ref, Array2<i32>);
+        try_convert_array_vec_to_torch!(value_ref, Array2<i64>);
+
+        try_convert_array_vec_to_torch!(value_ref, Array3<u8>);
+        try_convert_array_vec_to_torch!(value_ref, Array3<f32>);
+        try_convert_array_vec_to_torch!(value_ref, Array3<f64>);
+        try_convert_array_vec_to_torch!(value_ref, Array3<i32>);
+        try_convert_array_vec_to_torch!(value_ref, Array3<i64>);
+
+        try_convert_array_vec_to_torch!(value_ref, Array4<u8>);
+        try_convert_array_vec_to_torch!(value_ref, Array4<f32>);
+        try_convert_array_vec_to_torch!(value_ref, Array4<f64>);
+        try_convert_array_vec_to_torch!(value_ref, Array4<i32>);
+        try_convert_array_vec_to_torch!(value_ref, Array4<i64>);
+
+        let err = ParseError::new(&format!("The type of feature with name \"{}\" is not supported to convert to Torch Tensor", name));
+        Err(Box::new(err))
+    }
+}
+
+impl<I, S> Iterator for ToTorchTensor<I, S> where
+    I: Iterator<Item=HashMap<String, Box<dyn Any>>>,
+    S: AsRef<str> + Hash + Eq + Display {
+    type Item = Result<HashMap<String, Box<dyn Any>>, Box<Debug>>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut example = match self.iter.next() {
+            None => return None,
+            Some(example) => example,
+        };
+
+        let mut result = HashMap::<String, Box<dyn Any>>::new();
+
+        let entries: Vec<_> = match &self.names_opt {
+            None => example.into_iter().collect(),
+            Some(names) => {
+                let mut entries = Vec::new();
+                for name in names {
+                    let entry = match example.remove_entry(name.as_ref()) {
+                        Some(entry) => entry,
+                        None => {
+                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", name));
+                            return Some(Err(Box::new(err)));
+                        }
+                    };
+                    entries.push(entry);
+                }
+
+                for (name, val) in example.drain() {
+                    result.insert(name, val);
+                }
+
+                entries
+            }
+        };
+
+        for (name, feature_ref) in entries {
+            let ret = match Self::try_convert_to_tensor(&name, feature_ref) {
+                Err(err) => return Some(Err(err)),
+                Ok(ret) => ret,
+            };
+            result.insert(name, ret);
+        }
+
+        Some(Ok(result))
     }
 }
 
 // TODO: implementation
 
 // impl<'a, I> Iterator for IntoTfTensor<'a, I> where
-//     I: Iterator<Item=FeatureDict>
+//     I: Iterator<Item=HashMap<&'a str, Box<dyn Any>>>
 // {
-//     type Item = Result<HashMap<String, T>, ParseError>;
+//     type Item = Result<HashMap<&'a str, T>, ParseError>;
 
 //     fn next(&mut self) -> Option<Self::Item>
 //     {
@@ -554,7 +487,7 @@ impl<I> Iterator for IntoTorchTensor<I> where
 
 impl<I, K, V> Iterator for FilterHashMapEntry<I, K> where
     I: Iterator<Item=HashMap<K, V>>,
-    K: hash::Hash + cmp::Eq
+    K: Hash + Eq
 {
     type Item = HashMap<K, V>;
 
@@ -594,7 +527,7 @@ impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
 
 impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
-    E: std::fmt::Debug,
+    E: Debug,
 {
     type Item = V;
 
@@ -626,239 +559,213 @@ impl<I> Iterator for LoadByTfRecordIndex<I> where
     }
 }
 
-impl<I> Iterator for DecodeImage<I> where
-    I: Iterator<Item=FeatureDict>,
-{
-    type Item = Result<FeatureDict, Box<error::Error>>;
+impl<I, S> DecodeImage<I, S> {
+
+    fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Array3<u8>, Box<Debug>> {
+        let format = match format_opt {
+            Some(format) => format,
+            None => {
+                match image::guess_format(bytes) {
+                    Ok(format) => format,
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+        };
+
+        let (image, (width, height)) = match format {
+            ImageFormat::PNG => {
+                match PNGDecoder::new(bytes) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::JPEG => {
+                match JPEGDecoder::new(bytes) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::GIF => {
+                match GIFDecoder::new(bytes) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::WEBP => {
+                match WebpDecoder::new(bytes) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::PNM => {
+                match PNMDecoder::new(bytes) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::TIFF => {
+                match TIFFDecoder::new(io::Cursor::new(bytes)) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::TGA => {
+                match TGADecoder::new(io::Cursor::new(bytes)) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::BMP => {
+                match BMPDecoder::new(io::Cursor::new(bytes)) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            ImageFormat::ICO => {
+                match ICODecoder::new(io::Cursor::new(bytes)) {
+                    Ok(decoder) => {
+                        let dimensions = decoder.dimensions();
+                        match decoder.read_image() {
+                            Ok(image) => (image, dimensions),
+                            Err(err) => return Err(Box::new(err)),
+                        }
+                    },
+                    Err(err) => return Err(Box::new(err)),
+                }
+            }
+            _ => {
+                let err = ParseError::new(&format!("Image format is not supported"));
+                return Err(Box::new(err));
+            }
+        };
+
+
+        let array = match ArrayBase::from_shape_vec((width as usize, height as usize, 3), image) {
+            Err(err) => return Err(Box::new(err)),
+            Ok(array) => array,
+        };
+        Ok(array)
+    }
+}
+
+impl<I, S> Iterator for DecodeImage<I, S> where
+    I: Iterator<Item=HashMap<String, Box<dyn Any>>>,
+    S: AsRef<str> + Hash + Eq + Display {
+
+    type Item = Result<HashMap<String, Box<dyn Any>>, Box<Debug>>;
 
     fn next(&mut self) -> Option<Self::Item>
     {
-        match self.iter.next()
-        {
-            None => None,
-            Some(mut example) => {
-                for (query_name, format_opt) in &self.formats
-                {
+        let mut example = match self.iter.next() {
+            None => return None,
+            Some(example) => example,
+        };
 
-                    let mut entry = match example.entry(query_name.to_owned())
-                    {
-                        hash_map::Entry::Vacant(entry) => {
-                            let name = entry.key();
-                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", name));
-                            return Some(Err(Box::new(err)));
-                        }
-                        hash_map::Entry::Occupied(entry) => entry
-                    };
-                    let (format, bytes_list) = match entry.get_mut() {
-                        Feature::BytesList(bytes_list) => {
-                            if bytes_list.is_empty()
-                            {
-                                let name = entry.key();
-                                let err = ParseError::new(&format!("Cannot decode empty bytes list feature with name \"{}\"", name));
-                                return Some(Err(Box::new(err)));
-                            }
+        let mut result = HashMap::<String, Box<Any>>::new();
 
-                            match format_opt
-                            {
-                                Some(format) => (format.to_owned(), bytes_list),
-                                None => {
-                                    match image::guess_format(&bytes_list[0])
-                                    {
-                                        Ok(format) => (format, bytes_list),
-                                        Err(e) => return Some(Err(Box::new(e))),
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            let name = entry.key();
-                            let err = ParseError::new(&format!("Cannot decode non bytes list feature with name \"{}\"", name));
+        let entries = match &self.formats_opt {
+            Some(formats) => {
+                let mut entries = Vec::new();
+                for (select_name, format_opt) in formats {
+                    let (name, value_ref) = match example.remove_entry(select_name.as_ref()) {
+                        Some(entry) => entry,
+                        None => {
+                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", select_name));
                             return Some(Err(Box::new(err)));
                         }
                     };
 
-                    let mut images = Vec::new();
-                    match format
-                    {
-                        ImageFormat::PNG => {
-                            for bytes in bytes_list
-                            {
-                                match PNGDecoder::new(bytes.as_slice())
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::JPEG => {
-                            for bytes in bytes_list
-                            {
-                                match JPEGDecoder::new(bytes.as_slice())
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::GIF => {
-                            for bytes in bytes_list
-                            {
-                                match GIFDecoder::new(bytes.as_slice())
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::WEBP => {
-                            for bytes in bytes_list
-                            {
-                                match WebpDecoder::new(bytes.as_slice())
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::PNM => {
-                            for bytes in bytes_list
-                            {
-                                match PNMDecoder::new(bytes.as_slice())
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::TIFF => {
-                            for bytes in bytes_list
-                            {
-                                match TIFFDecoder::new(io::Cursor::new(&bytes))
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::TGA => {
-                            for bytes in bytes_list
-                            {
-                                match TGADecoder::new(io::Cursor::new(&bytes))
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::BMP => {
-                            for bytes in bytes_list
-                            {
-                                match BMPDecoder::new(io::Cursor::new(&bytes))
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        ImageFormat::ICO => {
-                            for bytes in bytes_list
-                            {
-                                match ICODecoder::new(io::Cursor::new(&bytes))
-                                {
-                                    Ok(decoder) => {
-                                        let dimensions = decoder.dimensions();
-                                        match decoder.read_image()
-                                        {
-                                            Ok(image) => images.push((image, dimensions)),
-                                            Err(e) => return Some(Err(Box::new(e))),
-                                        }
-                                    },
-                                    Err(e) => return Some(Err(Box::new(e))),
-                                }
-                            }
-                        }
-                        _ => {
-                            let name = entry.key();
-                            let err = ParseError::new(&format!("Image format is not supported for feature with name \"{}\"", name));
-                            return Some(Err(Box::new(err)));
-                        }
-                    };
-
-
-                    let mut arrays = Vec::new();
-                    for (image, dims) in images
-                    {
-                        let (width, height) = dims;
-                        let shape = (width as usize, height as usize, 3);
-
-                        match Array3::from_shape_vec(shape, image)
-                        {
-                            Ok(array) => arrays.push(array),
-                            Err(err) => return Some(Err(Box::new(err))),
-                        }
+                    for (name, val) in example.drain() {
+                        result.insert(name, val);
                     }
-                    entry.insert(Feature::Array3U8List(arrays));
+
+                    entries.push((name, value_ref, format_opt.to_owned()));
+                }
+                entries
+            }
+            None => example.into_iter().map(|(name, val)| (name, val, None)).collect(),
+        };
+
+        for (name, value_ref, format_opt) in entries
+        {
+            if let Some(bytes) = value_ref.downcast_ref::<Vec<u8>>() {
+                let image = match Self::try_decode_image(bytes, format_opt) {
+                    Err(err) => return Some(Err(err)),
+                    Ok(image) => image,
+                };
+                result.insert(name, Box::new(image));
+            }
+            else if let Some(bytes_list) = value_ref.downcast_ref::<Vec<Vec<u8>>>() {
+                if bytes_list.is_empty() {
+                    let err = ParseError::new(&format!("Cannot decode empty bytes list with name \"{}\"", name));
+                    return Some(Err(Box::new(err)));
                 }
 
-                Some(Ok(example))
+                let mut images = Vec::new();
+                for bytes in bytes_list {
+                    let image = match Self::try_decode_image(bytes, format_opt) {
+                        Err(err) => return Some(Err(err)),
+                        Ok(image) => image,
+                    };
+                    images.push(image);
+                }
+                result.insert(name, Box::new(images));
+            }
+            else {
+                let err = ParseError::new(&format!("Cannot decode non-bytes list feature with name \"{}\"", name));
+                return Some(Err(Box::new(err)));
             }
         }
+
+        Some(Ok(result))
     }
 }
 
@@ -869,12 +776,9 @@ impl<I> Iterator for Shuffle<I> where
     fn next(&mut self) -> Option<Self::Item>
     {
         let capacity = self.buffer.capacity();
-        if capacity > 0
-        {
-            while self.buffer.len() < capacity
-            {
-                match self.iter.next()
-                {
+        if capacity > 0 {
+            while self.buffer.len() < capacity {
+                match self.iter.next() {
                     None => break,
                     Some(item) => {
                         self.buffer.push_front(item);
@@ -887,8 +791,7 @@ impl<I> Iterator for Shuffle<I> where
 
             self.buffer.pop_back()
         }
-        else
-        {
+        else {
             self.iter.next()
         }
     }
