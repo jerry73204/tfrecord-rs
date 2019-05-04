@@ -18,6 +18,7 @@ image = "0.21.1"
 rand = "0.6.5"
 ndarray = "0.12.1"
 crossbeam = "0.7"
+mozjpeg = "0.8.14"
 
 [dev-dependencies]
 maplit = "1.0.1"

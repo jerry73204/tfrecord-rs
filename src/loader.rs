@@ -20,31 +20,29 @@ fn checksum(buf: &[u8]) -> u32 {
 }
 
 fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>, io::Error> where
-    R: io::Read
-{
+    R: io::Read {
     let mut len_buf = [0u8; 8];
 
-    match reader.read(&mut len_buf)
-    {
+    match reader.read(&mut len_buf) {
         Ok(0) => Ok(None),
         Ok(n) if n == len_buf.len() => {
             let len = (&len_buf[..]).read_u64::<LittleEndian>()?;
 
-            if check_integrity
-            {
+            if check_integrity {
+
                 let answer_cksum = reader.read_u32::<LittleEndian>()?;
                 let len_cksum = checksum(&len_buf);
-                if answer_cksum == len_cksum
-                {
+                if answer_cksum == len_cksum {
+
                     Ok(Some(len))
                 }
-                else
-                {
+                else {
+
                     Err(make_checksum_error(answer_cksum, len_cksum))
                 }
             }
-            else
-            {
+            else {
+
                 let mut buf = [0u8; 4];
                 reader.read_exact(&mut buf)?;
                 Ok(Some(len))
@@ -56,18 +54,18 @@ fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>,
 }
 
 fn try_read_record<R>(reader: &mut R, len: usize, check_integrity: bool) -> Result<Vec<u8>, io::Error> where
-    R: io::Read + io::Seek
-{
+    R: io::Read + io::Seek {
+
     let mut buf = Vec::<u8>::new();
     buf.resize(len, 0);
     reader.read_exact(&mut buf)?;
     let answer_cksum = reader.read_u32::<LittleEndian>()?;
 
-    if check_integrity
-    {
+    if check_integrity {
+
         let record_cksum = checksum(&buf);
-        if answer_cksum != record_cksum
-        {
+        if answer_cksum != record_cksum {
+
             return Err(make_checksum_error(answer_cksum, record_cksum));
         }
     }
@@ -79,16 +77,16 @@ pub fn build_indexes_from_paths(
     paths: Vec<PathBuf>,
     check_integrity: bool,
     parallel: bool,
-) -> Result<Vec<(Arc<PathBuf>, Vec<(usize, usize)>)>, io::Error>
-{
+) -> Result<Vec<(Arc<PathBuf>, Vec<(usize, usize)>)>, io::Error> {
+
     let load_file = |path| -> Result<_, io::Error> {
         let mut file = BufReader::new(File::open(&path)?);
         let index = build_index_from_reader(&mut file, check_integrity)?;
         Ok((Arc::new(path), index))
     };
 
-    let indexes = if parallel
-    {
+    let indexes = if parallel {
+
         let indexes_result: Result<Vec<_>, io::Error> = paths.into_par_iter()
             .map(load_file)
             .collect();
@@ -99,8 +97,8 @@ pub fn build_indexes_from_paths(
         });
         indexes
     }
-    else
-    {
+    else {
+
         let indexes_result: Result<Vec<_>, io::Error> = paths.into_iter()
             .map(load_file)
             .collect();
@@ -115,32 +113,30 @@ pub fn build_indexes_from_paths(
 }
 
 pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Result<Vec<(usize, usize)>, io::Error> where
-    R: io::Read + io::Seek
-{
+    R: io::Read + io::Seek {
+
     let mut index: Vec<(usize, usize)> = Vec::new();
 
-    loop
-    {
-        match try_read_len(reader, check_integrity)?
-        {
+    loop {
+        match try_read_len(reader, check_integrity)? {
             None => break,
             Some(len) => {
                 let offset = reader.seek(io::SeekFrom::Current(0))? as usize;
-                if check_integrity
-                {
+                if check_integrity {
+
                     let mut buf = Vec::<u8>::new();
                     buf.resize(len as usize, 0);
                     reader.read_exact(&mut buf)?;
                     let answer_cksum = reader.read_u32::<LittleEndian>()?;
                     let record_cksum = checksum(&buf);
 
-                    if answer_cksum != record_cksum
-                    {
+                    if answer_cksum != record_cksum {
+
                         return Err(make_checksum_error(answer_cksum, record_cksum));
                     }
                 }
-                else
-                {
+                else {
+
                     reader.seek(io::SeekFrom::Current(len as i64 + 4))?;
                 }
 
@@ -152,28 +148,28 @@ pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Resu
     Ok(index)
 }
 
-pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<(usize, usize)>, io::Error>
-{
+pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<(usize, usize)>, io::Error> {
+
     let mut index: Vec<(usize, usize)> = Vec::new();
     let mut offset = 0usize;
     let limit = buf.len();
     let len_size = 8;
     let cksum_size = 4;
 
-    while offset < limit
-    {
+    while offset < limit {
+
         let len_buf = &buf[offset..(offset + len_size)];
         let len = (&len_buf[..]).read_u64::<LittleEndian>()? as usize;
         offset += len_size;
 
-        if check_integrity
-        {
+        if check_integrity {
+
             let cksum_buf = &buf[offset..(offset + cksum_size)];
             let answer_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
             let len_cksum = checksum(len_buf);
 
-            if answer_cksum != len_cksum
-            {
+            if answer_cksum != len_cksum {
+
                 return Err(make_checksum_error(answer_cksum, len_cksum));
             }
         }
@@ -181,16 +177,16 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
 
         let saved_offset = offset;
 
-        if check_integrity
-        {
+        if check_integrity {
+
             let record_buf = &buf[offset..(offset + len)];
             let record_cksum = checksum(record_buf);
 
             let cksum_buf = &buf[(offset + len)..(offset + len + cksum_size)];
             let answer_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
 
-            if answer_cksum != record_cksum
-            {
+            if answer_cksum != record_cksum {
+
                 return Err(make_checksum_error(answer_cksum, record_cksum));
             }
         }
@@ -205,10 +201,10 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
 // traits
 
 pub trait Loader<A, L, E>: Sized where
-    E: error::Error,
-{
-    fn load(arg: A) -> Result<L, E>
-    {
+    E: error::Error, {
+
+    fn load(arg: A) -> Result<L, E> {
+
         Self::load_ex(arg, Default::default())
     }
     fn load_ex(_: A, _: LoaderOptions) -> Result<L, E>;
@@ -221,14 +217,14 @@ pub type RecordIndex = (usize, usize);
 // structs
 
 #[derive(Clone, Debug)]
-pub enum LoaderMethod
-{
+pub enum LoaderMethod {
+
     Mmap, File,
 }
 
 #[derive(Clone)]
-pub struct LoaderOptions
-{
+pub struct LoaderOptions {
+
     pub check_integrity: bool,
     pub auto_close: bool,
     pub parallel: bool,
@@ -237,8 +233,8 @@ pub struct LoaderOptions
     pub method: LoaderMethod,
 }
 
-enum FileList
-{
+enum FileList {
+
     MmapLru(lru::LruCache<Arc<PathBuf>, memmap::Mmap>),
     MmapMap(HashMap<Arc<PathBuf>, memmap::Mmap>),
     MmapOnDemand,
@@ -247,30 +243,30 @@ enum FileList
     FileOnDemand,
 }
 
-pub struct SeqLoader
-{
+pub struct SeqLoader {
+
     options: LoaderOptions,
     paths_iter: vec::IntoIter<PathBuf>,
     file_opt: Option<fs::File>,
 }
 
-pub struct IndexedLoader
-{
+pub struct IndexedLoader {
+
     indexes: Vec<RecordIndex>,
     record_indexes: Vec<(Arc<PathBuf>, Vec<RecordIndex>)>,
     file_list: FileList,
 }
 
 #[derive(Clone)]
-pub struct IndexIter
-{
+pub struct IndexIter {
+
     cursor: usize,
     indexes: Vec<RecordIndex>,
 }
 
 #[derive(Clone)]
-pub struct IndexRecordIter
-{
+pub struct IndexRecordIter {
+
     loader_rc: Arc<IndexedLoader>,
     cursor: usize,
 }
@@ -278,10 +274,10 @@ pub struct IndexRecordIter
 
 // impls
 
-impl Default for LoaderOptions
-{
-    fn default() -> Self
-    {
+impl Default for LoaderOptions {
+
+    fn default() -> Self {
+
         LoaderOptions {
             check_integrity: true,
             auto_close: true,
@@ -294,31 +290,31 @@ impl Default for LoaderOptions
 }
 
 
-impl IndexedLoader
-{
-    pub fn index_iter(&self) -> IndexIter
-    {
+impl IndexedLoader {
+
+    pub fn index_iter(&self) -> IndexIter {
+
         IndexIter {
             cursor: 0,
             indexes: self.indexes.clone()
         }
     }
 
-    pub fn into_record_iter(self) -> IndexRecordIter
-    {
+    pub fn into_record_iter(self) -> IndexRecordIter {
+
         IndexRecordIter {
             cursor: 0,
             loader_rc: Arc::new(self),
         }
     }
 
-    pub fn get_indexes(&self) -> &[RecordIndex]
-    {
+    pub fn get_indexes(&self) -> &[RecordIndex] {
+
         &self.indexes
     }
 
-    pub fn fetch(&mut self, index: RecordIndex) -> Option<Vec<u8>>
-    {
+    pub fn fetch(&mut self, index: RecordIndex) -> Option<Vec<u8>> {
+
         let (outer_ind, inner_ind) = index;
         let (path_rc, file_index) = self.record_indexes.get_mut(outer_ind)?;
         let (offset_ref, len_ref) = file_index.get(inner_ind)?;
@@ -341,8 +337,8 @@ impl IndexedLoader
                 Some(buf)
             }
             FileList::FileMap(ref mut file_map) => {
-                let buf = match file_map.get_mut(path_rc)
-                {
+                let buf = match file_map.get_mut(path_rc) {
+
                     Some(ref mut file) => {
                         read_from_file(file, offset, len).unwrap()
                     },
@@ -419,27 +415,27 @@ impl IndexedLoader
 }
 
 
-impl Loader<&str, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<&str, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         IndexedLoader::load_ex(path_str.to_owned(), options)
     }
 }
 
-impl Loader<String, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(path_str: String, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<String, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(path_str: String, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         let path = PathBuf::from(path_str);
         IndexedLoader::load_ex(path, options)
     }
 }
 
-impl Loader<Vec<&str>, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<Vec<&str>, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         let paths: Vec<_> = path_strs.into_iter()
             .map(|orig| PathBuf::from(orig))
             .collect();
@@ -447,10 +443,10 @@ impl Loader<Vec<&str>, IndexedLoader, io::Error> for IndexedLoader
     }
 }
 
-impl Loader<Vec<String>, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<Vec<String>, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         let paths: Vec<_> = path_strs.into_iter()
             .map(|orig| PathBuf::from(orig))
             .collect();
@@ -458,39 +454,39 @@ impl Loader<Vec<String>, IndexedLoader, io::Error> for IndexedLoader
     }
 }
 
-impl Loader<&[&Path], IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<&[&Path], IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         IndexedLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<Vec<&Path>, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<Vec<&Path>, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         IndexedLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<&Path, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(path: &Path, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<&Path, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(path: &Path, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         IndexedLoader::load_ex(path.to_owned(), options)
     }
 }
 
-impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         let meta = fs::metadata(&path).unwrap();
-        if meta.is_dir()
-        {
+        if meta.is_dir() {
+
             let paths: Vec<_> = fs::read_dir(&path)
                 .unwrap()
                 .filter_map(|entry_ret| {
@@ -498,27 +494,27 @@ impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader
                     let meta = entry.metadata().unwrap();
                     let fname = entry.file_name().into_string().unwrap();
 
-                    if meta.is_file() && fname.ends_with(".tfrecord")
-                    {
+                    if meta.is_file() {
+
                         Some(entry.path())
                     }
-                    else
-                    {
+                    else {
+
                         None
                     }
 
                 }).collect();
             IndexedLoader::load_ex(paths, options)
         }
-        else if meta.is_file()
-        {
+        else if meta.is_file() {
+
             let path_list = vec![path];
             IndexedLoader::load_ex(path_list, options)
         }
-        else
-        {
-            let path_str = match path.to_str()
-            {
+        else {
+
+            let path_str = match path.to_str() {
+
                 Some(path_str) => path_str,
                 None => "",
             };
@@ -527,10 +523,10 @@ impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader
     }
 }
 
-impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader
-{
-    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<IndexedLoader, io::Error>
-    {
+impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader {
+
+    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+
         let record_indexes = build_indexes_from_paths(paths, options.check_integrity, options.parallel).unwrap();
 
         let file_list = match options.method {
@@ -552,10 +548,10 @@ impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader
 
         let mut indexes = Vec::<RecordIndex>::new();
 
-        for (outer_ind, (_, file_index)) in record_indexes.iter().enumerate()
-        {
-            for inner_ind in 0..(file_index.len())
-            {
+        for (outer_ind, (_, file_index)) in record_indexes.iter().enumerate() {
+
+            for inner_ind in 0..(file_index.len()) {
+
                 indexes.push((outer_ind, inner_ind));
             }
         }
@@ -571,27 +567,27 @@ impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader
 }
 
 
-impl Loader<&str, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<&str, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         SeqLoader::load_ex(path_str.to_owned(), options)
     }
 }
 
-impl Loader<String, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(path_str: String, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<String, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(path_str: String, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         let path = PathBuf::from(path_str);
         SeqLoader::load_ex(path, options)
     }
 }
 
-impl Loader<Vec<&str>, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<Vec<&str>, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         let paths: Vec<_> = path_strs.into_iter()
             .map(|orig| PathBuf::from(orig))
             .collect();
@@ -599,10 +595,10 @@ impl Loader<Vec<&str>, SeqLoader, io::Error> for SeqLoader
     }
 }
 
-impl Loader<Vec<String>, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<Vec<String>, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         let paths: Vec<_> = path_strs.into_iter()
             .map(|orig| PathBuf::from(orig))
             .collect();
@@ -610,39 +606,39 @@ impl Loader<Vec<String>, SeqLoader, io::Error> for SeqLoader
     }
 }
 
-impl Loader<&[&Path], SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<&[&Path], SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         SeqLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<Vec<&Path>, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<Vec<&Path>, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         SeqLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<&Path, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(path: &Path, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<&Path, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(path: &Path, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         SeqLoader::load_ex(path.to_owned(), options)
     }
 }
 
-impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         let meta = fs::metadata(&path).unwrap();
-        if meta.is_dir()
-        {
+        if meta.is_dir() {
+
             let paths: Vec<_> = fs::read_dir(&path)
                 .unwrap()
                 .filter_map(|entry_ret| {
@@ -650,27 +646,27 @@ impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader
                     let meta = entry.metadata().unwrap();
                     let fname = entry.file_name().into_string().unwrap();
 
-                    if meta.is_file() && fname.ends_with(".tfrecord")
-                    {
+                    if meta.is_file() {
+
                         Some(entry.path())
                     }
-                    else
-                    {
+                    else {
+
                         None
                     }
 
                 }).collect();
             SeqLoader::load_ex(paths, options)
         }
-        else if meta.is_file()
-        {
+        else if meta.is_file() {
+
             let path_list = vec![path];
             SeqLoader::load_ex(path_list, options)
         }
-        else
-        {
-            let path_str = match path.to_str()
-            {
+        else {
+
+            let path_str = match path.to_str() {
+
                 Some(path_str) => path_str,
                 None => "",
             };
@@ -679,10 +675,10 @@ impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader
     }
 }
 
-impl Loader<Vec<PathBuf>, SeqLoader, io::Error> for SeqLoader
-{
-    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<SeqLoader, io::Error>
-    {
+impl Loader<Vec<PathBuf>, SeqLoader, io::Error> for SeqLoader {
+
+    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+
         let paths_iter = paths.into_iter();
         let file_opt = None;
         Ok(
@@ -695,19 +691,19 @@ impl Loader<Vec<PathBuf>, SeqLoader, io::Error> for SeqLoader
     }
 }
 
-impl Iterator for SeqLoader
-{
+impl Iterator for SeqLoader {
+
     type Item = Vec<u8>;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        let (mut file, len) = loop
-        {
-            match &mut self.file_opt
-            {
+    fn next(&mut self) -> Option<Self::Item> {
+
+        let (mut file, len) = loop {
+
+            match &mut self.file_opt {
+
                 None => {
-                    match self.paths_iter.next()
-                    {
+                    match self.paths_iter.next() {
+
                         None => return None,
                         Some(path) => {
                             self.file_opt = Some(fs::File::open(path).unwrap());
@@ -716,8 +712,8 @@ impl Iterator for SeqLoader
                     }
                 }
                 Some(ref mut file) => {
-                    match try_read_len(file, self.options.check_integrity).unwrap()
-                    {
+                    match try_read_len(file, self.options.check_integrity).unwrap() {
+
                         Some(len) => break (file, len),
                         None => {
                             self.file_opt = None;
@@ -737,42 +733,42 @@ impl Iterator for SeqLoader
     }
 }
 
-impl Iterator for IndexIter
-{
+impl Iterator for IndexIter {
+
     type Item = RecordIndex;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        if self.cursor < self.indexes.len()
-        {
+    fn next(&mut self) -> Option<Self::Item> {
+
+        if self.cursor < self.indexes.len() {
+
             let ret = self.indexes[self.cursor];
             self.cursor += 1;
             Some(ret)
         }
-        else
-        {
+        else {
+
             None
         }
     }
 }
 
-impl Iterator for IndexRecordIter
-{
+impl Iterator for IndexRecordIter {
+
     type Item = Vec<u8>;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
+    fn next(&mut self) -> Option<Self::Item> {
+
         let loader = Arc::get_mut(&mut self.loader_rc).unwrap();
         let indexes = loader.get_indexes();
-        if self.cursor < indexes.len()
-        {
+        if self.cursor < indexes.len() {
+
             let index = indexes[self.cursor];
             let record = loader.fetch(index).unwrap();
             self.cursor += 1;
             Some(record)
         }
-        else
-        {
+        else {
+
             None
         }
     }

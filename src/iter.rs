@@ -5,12 +5,13 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::collections::vec_deque::VecDeque;
 use std::collections::{HashMap, HashSet};
+use std::mem::transmute;
+use std::panic::catch_unwind;
 use std::any::Any;
 use std::fmt::{Debug, Display};
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
-use image::jpeg::JPEGDecoder;
 use image::gif::Decoder as GIFDecoder;
 use image::webp::WebpDecoder;
 use image::pnm::PNMDecoder;
@@ -105,7 +106,7 @@ pub trait DsIterator: Iterator
 
     fn prefetch(mut self, buf_size: usize) -> Prefetch<Self> where
         Self: 'static + Sized + Iterator + Sync + Send,
-        Self::Item: 'static + Send + Sync,
+        Self::Item: 'static + Sync + Send,
     {
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
@@ -221,7 +222,7 @@ impl<I, S> Iterator for ToTfExample<I, S> where
         I: Iterator<Item=Vec<u8>>,
         S: AsRef<str> + Hash + Eq + Display, {
 
-    type Item = Result<HashMap<String, Box<dyn Any>>, Box<Debug>>;
+    type Item = Result<HashMap<String, Box<dyn Any + Sync + Send>>, Box<dyn Debug + Sync + Send>>;
 
     fn next(&mut self) -> Option<Self::Item>
     {
@@ -257,7 +258,7 @@ impl<I, S> Iterator for ToTfExample<I, S> where
         let mut result = HashMap::new();
 
         for (name, value) in entries {
-            let parsed_value: Box<dyn Any> = match value {
+            let parsed_value: Box<dyn Any + Sync + Send> = match value {
                 parser::FeatureList::Bytes(val) => Box::new(val),
                 parser::FeatureList::F32(val) => Box::new(val),
                 parser::FeatureList::I64(val) => Box::new(val),
@@ -332,7 +333,7 @@ macro_rules! try_convert_vec_vec_to_torch (
 impl<I, S> ToTorchTensor<I, S> where
     S: AsRef<str> {
 
-    fn try_convert_to_tensor(name: &str, value_ref: Box<dyn Any>) -> Result<Box<dyn Any>, Box<dyn Debug>> {
+    fn try_convert_to_tensor(name: &str, value_ref: Box<dyn Any + Sync + Send>) -> Result<Box<dyn Any>, Box<dyn Debug + Sync + Send>> {
 
         // TODO: optimize type matching
         try_convert_vec_to_torch!(value_ref, u8);
@@ -450,9 +451,9 @@ impl<I, S> ToTorchTensor<I, S> where
 }
 
 impl<I, S> Iterator for ToTorchTensor<I, S> where
-    I: Iterator<Item=HashMap<String, Box<dyn Any>>>,
+    I: Iterator<Item=HashMap<String, Box<dyn Any + Sync + Send>>>,
     S: AsRef<str> + Hash + Eq + Display {
-    type Item = Result<HashMap<String, Box<dyn Any>>, Box<Debug>>;
+    type Item = Result<HashMap<String, Box<dyn Any>>, Box<dyn Debug + Sync + Send>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut example = match self.iter.next() {
@@ -500,7 +501,7 @@ impl<I, S> Iterator for ToTorchTensor<I, S> where
 // TODO: implementation
 
 // impl<'a, I> Iterator for IntoTfTensor<'a, I> where
-//     I: Iterator<Item=HashMap<&'a str, Box<dyn Any>>>
+//     I: Iterator<Item=HashMap<&'a str, Box<dyn Any + Sync + Send>>>
 // {
 //     type Item = Result<HashMap<&'a str, T>, ParseError>;
 
@@ -603,7 +604,7 @@ impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
 
 impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
-    E: Debug,
+    E: Debug + Sync + Send,
 {
     type Item = V;
 
@@ -637,7 +638,7 @@ impl<I> Iterator for LoadByTfRecordIndex<I> where
 
 impl<I, S> DecodeImage<I, S> {
 
-    fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Array3<u8>, Box<Debug>> {
+    fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Array3<u8>, Box<dyn Debug + Sync + Send>> {
         let format = match format_opt {
             Some(format) => format,
             None => {
@@ -648,13 +649,13 @@ impl<I, S> DecodeImage<I, S> {
             }
         };
 
-        let (image, (width, height)) = match format {
+        let (image, (width, height, channels)) = match format {
             ImageFormat::PNG => {
                 match PNGDecoder::new(bytes) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -662,23 +663,17 @@ impl<I, S> DecodeImage<I, S> {
                 }
             }
             ImageFormat::JPEG => {
-                match JPEGDecoder::new(bytes) {
-                    Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
+                match  Self::decode_jpeg(&bytes) {
                     Err(err) => return Err(Box::new(err)),
+                    Ok((image, dims)) => (image, dims),
                 }
             }
             ImageFormat::GIF => {
                 match GIFDecoder::new(bytes) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -688,9 +683,9 @@ impl<I, S> DecodeImage<I, S> {
             ImageFormat::WEBP => {
                 match WebpDecoder::new(bytes) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -700,9 +695,9 @@ impl<I, S> DecodeImage<I, S> {
             ImageFormat::PNM => {
                 match PNMDecoder::new(bytes) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -712,9 +707,9 @@ impl<I, S> DecodeImage<I, S> {
             ImageFormat::TIFF => {
                 match TIFFDecoder::new(io::Cursor::new(bytes)) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -724,9 +719,9 @@ impl<I, S> DecodeImage<I, S> {
             ImageFormat::TGA => {
                 match TGADecoder::new(io::Cursor::new(bytes)) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -736,9 +731,9 @@ impl<I, S> DecodeImage<I, S> {
             ImageFormat::BMP => {
                 match BMPDecoder::new(io::Cursor::new(bytes)) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -748,9 +743,9 @@ impl<I, S> DecodeImage<I, S> {
             ImageFormat::ICO => {
                 match ICODecoder::new(io::Cursor::new(bytes)) {
                     Ok(decoder) => {
-                        let dimensions = decoder.dimensions();
+                        let (width, height) = decoder.dimensions();
                         match decoder.read_image() {
-                            Ok(image) => (image, dimensions),
+                            Ok(image) => (image, (width as usize, height as usize, 3)),
                             Err(err) => return Err(Box::new(err)),
                         }
                     },
@@ -764,19 +759,55 @@ impl<I, S> DecodeImage<I, S> {
         };
 
 
-        let array = match ArrayBase::from_shape_vec((width as usize, height as usize, 3), image) {
+        let array = match ArrayBase::from_shape_vec((width, height, channels), image) {
             Err(err) => return Err(Box::new(err)),
             Ok(array) => array,
         };
         Ok(array)
     }
+
+    fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::Error> {
+        catch_unwind(|| -> Result<_, io::Error> {
+            let decompress = mozjpeg::Decompress::with_markers(mozjpeg::ALL_MARKERS)
+                .from_mem(data)?;
+            let (width, height) = decompress.size();
+
+            match decompress.image()? {
+                mozjpeg::Format::RGB(mut dec) => {
+                    let mut pixels = dec.read_scanlines::<(u8, u8, u8)>().unwrap();
+                    let bytes = unsafe {
+                        pixels.set_len(pixels.len() * 3);
+                        transmute::<Vec<(u8, u8, u8)>, Vec<u8>>(pixels)
+                    };
+                    assert!(bytes.len() == width * height * 3);
+                    Ok((bytes, (width, height, 3)))
+                }
+                mozjpeg::Format::Gray(mut dec) => {
+                    let pixels = dec.read_scanlines::<u8>().unwrap();
+                    Ok((pixels, (width, height, 1)))
+                }
+                mozjpeg::Format::CMYK(mut dec) => {
+                    let pixels = dec.read_scanlines::<(u8, u8, u8, u8)>().unwrap();
+                    let bytes = pixels.into_iter()
+                        .flat_map(|(c, m, y, k)| {
+                            let r = ((255_f64 - c as f64) * (255_f64 - k as f64) / 255_f64) as u8;
+                            let g = ((255_f64 - m as f64) * (255_f64 - k as f64) / 255_f64) as u8;
+                            let b = ((255_f64 - y as f64) * (255_f64 - k as f64) / 255_f64) as u8;
+                            vec![r, g, b]
+                        })
+                        .collect::<Vec<u8>>();
+                    Ok((bytes, (width, height, 3)))
+                }
+            }
+        }).unwrap()
+    }
 }
 
 impl<I, S> Iterator for DecodeImage<I, S> where
-    I: Iterator<Item=HashMap<String, Box<dyn Any>>>,
+    I: Iterator<Item=HashMap<String, Box<dyn Any + Sync + Send>>>,
     S: AsRef<str> + Hash + Eq + Display {
 
-    type Item = Result<HashMap<String, Box<dyn Any>>, Box<Debug>>;
+    type Item = Result<HashMap<String, Box<dyn Any + Sync + Send>>, Box<dyn Debug + Sync + Send>>;
 
     fn next(&mut self) -> Option<Self::Item>
     {
@@ -785,7 +816,7 @@ impl<I, S> Iterator for DecodeImage<I, S> where
             Some(example) => example,
         };
 
-        let mut result = HashMap::<String, Box<Any>>::new();
+        let mut result = HashMap::<String, Box<dyn Any + Sync + Send>>::new();
 
         let entries = match &self.formats_opt {
             Some(formats) => {
@@ -874,7 +905,8 @@ impl<I> Iterator for Shuffle<I> where
 }
 
 impl<I> Iterator for Prefetch<I> where
-    I: Iterator, {
+    I: Iterator + Sync + Send,
+    I::Item: Sync + Send {
 
     type Item = I::Item;
 

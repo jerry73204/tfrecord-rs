@@ -7,6 +7,7 @@ extern crate glob;
 extern crate rayon;
 extern crate lru;
 extern crate crossbeam;
+extern crate mozjpeg;
 
 mod from_tf;
 pub mod loader;
