@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Cursor};
 use std::thread::{self, JoinHandle};
 use std::cmp::Eq;
 use std::hash::Hash;
@@ -9,6 +9,7 @@ use std::mem::transmute;
 use std::panic::catch_unwind;
 use std::any::Any;
 use std::fmt::{Debug, Display};
+use rayon::prelude::*;
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
@@ -27,28 +28,318 @@ use crate::parser;
 use crate::loader;
 use crate::error::{ParseError, make_load_index_error};
 
+// type defs
+
+type FeatureType = Box<dyn Any + Sync + Send>;
+type ErrorType = Box<dyn Debug + Sync + Send>;
+type ExampleType = HashMap<String, FeatureType>;
+
+// functoins
+
+fn filter_entries<S, V>(
+    mut map: HashMap<String, V>,
+    names_opt: &Option<HashSet<S>>
+) -> Result<(HashMap<String, V>, Vec<(String, V)>), ParseError> where
+    S: AsRef<str>{
+
+    let mut new_map = HashMap::new();
+
+    let entries: Vec<_> = match names_opt {
+        Some(ref names) => {
+            let mut entries = Vec::new();
+            for name in names {
+                let entry = match map.remove_entry(name.as_ref()) {
+                    Some(entry) => entry,
+                    None => {
+                        let err = ParseError::new(&format!("Feature with name \"{}\" is not found", name.as_ref()));
+                        return Err(err);
+                    }
+                };
+                entries.push(entry);
+            }
+
+            new_map = map;
+            entries
+        }
+        None => map.into_iter().collect()
+    };
+
+    Ok((new_map, entries))
+}
+
+
+fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Array3<u8>, ErrorType> {
+    let format = match format_opt {
+        Some(format) => format,
+        None => {
+            match image::guess_format(bytes) {
+                Ok(format) => format,
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+    };
+
+    let (image, (width, height, channels)) = match format {
+        ImageFormat::PNG => {
+            match PNGDecoder::new(bytes) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        ImageFormat::JPEG => {
+            match  decode_jpeg(&bytes) {
+                Err(err) => return Err(Box::new(err)),
+                Ok((image, dims)) => (image, dims),
+            }
+        }
+        ImageFormat::GIF => {
+            match GIFDecoder::new(bytes) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        ImageFormat::WEBP => {
+            match WebpDecoder::new(bytes) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        ImageFormat::PNM => {
+            match PNMDecoder::new(bytes) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        ImageFormat::TIFF => {
+            match TIFFDecoder::new(Cursor::new(bytes)) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        ImageFormat::TGA => {
+            match TGADecoder::new(Cursor::new(bytes)) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        ImageFormat::BMP => {
+            match BMPDecoder::new(Cursor::new(bytes)) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        ImageFormat::ICO => {
+            match ICODecoder::new(Cursor::new(bytes)) {
+                Ok(decoder) => {
+                    let (width, height) = decoder.dimensions();
+                    match decoder.read_image() {
+                        Ok(image) => (image, (width as usize, height as usize, 3)),
+                        Err(err) => return Err(Box::new(err)),
+                    }
+                },
+                Err(err) => return Err(Box::new(err)),
+            }
+        }
+        _ => {
+            let err = ParseError::new(&format!("Image format is not supported"));
+            return Err(Box::new(err));
+        }
+    };
+
+
+    let array = match ArrayBase::from_shape_vec((width, height, channels), image) {
+        Err(err) => return Err(Box::new(err)),
+        Ok(array) => array,
+    };
+    Ok(array)
+}
+
+fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::Error> {
+    catch_unwind(|| -> Result<_, io::Error> {
+        let decompress = mozjpeg::Decompress::with_markers(mozjpeg::ALL_MARKERS)
+            .from_mem(data)?;
+        let (width, height) = decompress.size();
+
+        match decompress.image()? {
+            mozjpeg::Format::RGB(mut dec) => {
+                let mut pixels = dec.read_scanlines::<(u8, u8, u8)>().unwrap();
+                let bytes = unsafe {
+                    pixels.set_len(pixels.len() * 3);
+                    transmute::<Vec<(u8, u8, u8)>, Vec<u8>>(pixels)
+                };
+                assert!(bytes.len() == width * height * 3);
+                Ok((bytes, (width, height, 3)))
+            }
+            mozjpeg::Format::Gray(mut dec) => {
+                let pixels = dec.read_scanlines::<u8>().unwrap();
+                Ok((pixels, (width, height, 1)))
+            }
+            mozjpeg::Format::CMYK(mut dec) => {
+                let pixels = dec.read_scanlines::<(u8, u8, u8, u8)>().unwrap();
+                let bytes = pixels.into_iter()
+                    .flat_map(|(c, m, y, k)| {
+                        let r = ((255_f64 - c as f64) * (255_f64 - k as f64) / 255_f64) as u8;
+                        let g = ((255_f64 - m as f64) * (255_f64 - k as f64) / 255_f64) as u8;
+                        let b = ((255_f64 - y as f64) * (255_f64 - k as f64) / 255_f64) as u8;
+                        vec![r, g, b]
+                    })
+                    .collect::<Vec<u8>>();
+                Ok((bytes, (width, height, 3)))
+            }
+        }
+    }).unwrap()
+}
+
+fn decode_image_on_example<S>(
+    mut example: ExampleType,
+    formats_opt: &Option<HashMap<S, Option<ImageFormat>>>,
+) -> Result<ExampleType, ErrorType> where
+    S: AsRef<str> + Hash + Eq + Display {
+
+    let mut result = ExampleType::new();
+    let entries = match formats_opt {
+        Some(formats) => {
+            let mut entries = Vec::new();
+            for (select_name, format_opt) in formats {
+                let (name, value_ref) = match example.remove_entry(select_name.as_ref()) {
+                    Some(entry) => entry,
+                    None => {
+                        let err = ParseError::new(&format!("Name \"{}\" is not found in example", select_name));
+                        return Err(Box::new(err));
+                    }
+                };
+
+                for (name, val) in example.drain() {
+                    result.insert(name, val);
+                }
+
+                entries.push((name, value_ref, format_opt.to_owned()));
+            }
+            entries
+        }
+        None => example.into_iter().map(|(name, val)| (name, val, None)).collect(),
+    };
+
+    for (name, value_ref, format_opt) in entries {
+        if let Some(bytes) = value_ref.downcast_ref::<Vec<u8>>() {
+            let image = match try_decode_image(bytes, format_opt) {
+                Err(err) => return Err(err),
+                Ok(image) => image,
+            };
+            result.insert(name, Box::new(image));
+        }
+        else if let Some(bytes_list) = value_ref.downcast_ref::<Vec<Vec<u8>>>() {
+            if bytes_list.is_empty() {
+                let err = ParseError::new(&format!("Cannot decode empty bytes list with name \"{}\"", name));
+                return Err(Box::new(err));
+            }
+
+            let mut images = Vec::new();
+            for bytes in bytes_list {
+                let image = match try_decode_image(bytes, format_opt) {
+                    Err(err) => return Err(err),
+                    Ok(image) => image,
+                };
+                images.push(image);
+            }
+            result.insert(name, Box::new(images));
+        }
+        else {
+            let err = ParseError::new(&format!("Cannot decode non-bytes list feature with name \"{}\"", name));
+            return Err(Box::new(err));
+        }
+    }
+
+    Ok(result)
+}
+
+
 // Trait defiintions
 
-pub trait DsIterator: Iterator
-{
-    fn to_tf_example(self, names_opt: Option<HashSet<&str>>) -> ToTfExample<Self, &str> where
-        Self: Sized {
+pub trait DsIterator: Iterator + Sized {
+
+    fn to_tf_example(self, names_opt: Option<HashSet<&str>>) -> ToTfExample<Self, &str> {
         ToTfExample {
             iter: self,
             names_opt,
         }
     }
 
-    fn decode_image<S>(self, formats_opt: Option<HashMap<S, Option<ImageFormat>>>) -> DecodeImage<Self, S> where
-        Self: Sized {
+    fn decode_image<S>(self, formats_opt: Option<HashMap<S, Option<ImageFormat>>>) -> DecodeImage<Self, S> {
         DecodeImage {
             iter: self,
             formats_opt,
         }
     }
 
-    fn to_torch_tensor(self, names_opt: Option<HashSet<&str>>) -> ToTorchTensor<Self, &str> where
-        Self: Sized, {
+    fn par_decode_image<S>(
+        self, formats_opt: Option<HashMap<S, Option<ImageFormat>>>,
+        buf_size: usize,
+    ) -> ParallelDecodeImage where
+        Self: 'static + Iterator<Item=ExampleType> + Send,
+        S: 'static + AsRef<str> + Hash + Eq + Display + Sync + Send {
+
+        let (sender, receiver) = crossbeam::channel::bounded(buf_size);
+
+        rayon::spawn(move || {
+            let iter = self.par_bridge()
+                .map(move |example| decode_image_on_example(example, &formats_opt));
+
+            iter.for_each(|val| {
+                sender.send(Some(val)).unwrap();
+            });
+            sender.send(None).unwrap();
+        });
+
+        ParallelDecodeImage {
+            receiver,
+            finished: false,
+        }
+    }
+
+    fn to_torch_tensor(self, names_opt: Option<HashSet<&str>>) -> ToTorchTensor<Self, &str> {
         ToTorchTensor {
             iter: self,
             names_opt,
@@ -57,8 +348,8 @@ pub trait DsIterator: Iterator
     }
 
     fn to_tf_tensor(self) -> ToTfTensor<Self> where
-        Self: Sized
-    {
+        Self: Sized {
+
         ToTfTensor {
             iter: self,
         }
@@ -72,8 +363,8 @@ pub trait DsIterator: Iterator
     }
 
     fn unwrap_result<V, E>(self) -> UnwrapResult<Self, V, E> where
-        Self: Sized
-    {
+        Self: Sized {
+
         UnwrapResult {
             iter: self,
             dummy_value: PhantomData,
@@ -82,8 +373,8 @@ pub trait DsIterator: Iterator
     }
 
     fn unwrap_ok<V, E>(self) -> UnwrapOk<Self, V, E> where
-        Self: Sized
-    {
+        Self: Sized {
+
         UnwrapOk {
             iter: self,
             dummy_value: PhantomData,
@@ -91,11 +382,10 @@ pub trait DsIterator: Iterator
         }
     }
 
-    fn shuffle(self, buf_size: usize) -> Shuffle<Self> where
-        Self: Sized + Iterator,
-    {
+    fn shuffle(self, buf_size: usize) -> Shuffle<Self, StdRng> {
+
         let buffer = VecDeque::with_capacity(buf_size);
-        let rng = rand::thread_rng();
+        let rng = StdRng::from_entropy();
 
         Shuffle {
             iter: self,
@@ -105,12 +395,12 @@ pub trait DsIterator: Iterator
     }
 
     fn prefetch(mut self, buf_size: usize) -> Prefetch<Self> where
-        Self: 'static + Sized + Iterator + Sync + Send,
-        Self::Item: 'static + Sync + Send,
-    {
+        Self: 'static + Sync + Send,
+        Self::Item: 'static + Sync + Send, {
+
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
-        let worker = thread::spawn(move ||{
+        rayon::spawn(move || {
             loop {
                 match self.next() {
                     None => {
@@ -125,14 +415,13 @@ pub trait DsIterator: Iterator
         });
 
         Prefetch {
-            worker_opt: Some(worker),
             receiver,
+            finished: false,
         }
     }
 
-    fn load_by_tfrecord_index(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> where
-        Self: Sized
-    {
+    fn load_by_tfrecord_index(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> {
+
         LoadByTfRecordIndex {
             iter: self,
             loader,
@@ -143,71 +432,76 @@ pub trait DsIterator: Iterator
 // Struct definitions
 
 #[derive(Clone)]
-pub struct ToTfExample<I, S>
-{
+pub struct ToTfExample<I, S> {
+
     names_opt: Option<HashSet<S>>,
     iter: I,
 }
 
-pub struct ToTorchTensor<I, S>
-{
+pub struct ToTorchTensor<I, S> {
+
     iter: I,
     names_opt: Option<HashSet<S>>,
     dummy_name: PhantomData<S>,
 }
 
 #[derive(Clone)]
-pub struct ToTfTensor<I>
-{
+pub struct ToTfTensor<I> {
+
     iter: I,
 }
 
 #[derive(Clone)]
-pub struct FilterHashMapEntry<I, K>
-{
+pub struct FilterHashMapEntry<I, K> {
+
     keys: HashSet<K>,
     iter: I,
 }
 
 #[derive(Clone)]
-pub struct UnwrapResult<I, V, E>
-{
+pub struct UnwrapResult<I, V, E> {
+
     iter: I,
     dummy_value: PhantomData<V>,
     dummy_error: PhantomData<E>,
 }
 
 #[derive(Clone)]
-pub struct UnwrapOk<I, V, E>
-{
+pub struct UnwrapOk<I, V, E> {
+
     iter: I,
     dummy_value: PhantomData<V>,
     dummy_error: PhantomData<E>,
 }
 
 #[derive(Clone)]
-pub struct DecodeImage<I, S>
-{
+pub struct DecodeImage<I, S> {
+
     formats_opt: Option<HashMap<S, Option<ImageFormat>>>,
     iter: I,
 }
 
 #[derive(Clone)]
-pub struct Shuffle<I: Iterator>
-{
+pub struct ParallelDecodeImage {
+    receiver: Receiver<Option<Result<ExampleType, ErrorType>>>,
+    finished: bool,
+}
+
+#[derive(Clone)]
+pub struct Shuffle<I: Iterator, R: rand::Rng> {
     iter: I,
     buffer: VecDeque<I::Item>,
-    rng: rand::rngs::ThreadRng,
+    rng: R,
 }
 
-pub struct Prefetch<I: Iterator>
-{
+pub struct Prefetch<I: Iterator> {
+
     receiver: Receiver<Option<I::Item>>,
-    worker_opt: Option<JoinHandle<()>>,
+    finished: bool,
 }
 
-pub struct LoadByTfRecordIndex<I>
-{
+pub struct LoadByTfRecordIndex<I> {
+
     iter: I,
     loader: loader::IndexedLoader,
 }
@@ -215,50 +509,35 @@ pub struct LoadByTfRecordIndex<I>
 // impl
 
 impl<T> DsIterator for T where
-    T: Iterator,
-{}
+    T: Iterator, {
+}
 
 impl<I, S> Iterator for ToTfExample<I, S> where
         I: Iterator<Item=Vec<u8>>,
         S: AsRef<str> + Hash + Eq + Display, {
 
-    type Item = Result<HashMap<String, Box<dyn Any + Sync + Send>>, Box<dyn Debug + Sync + Send>>;
+    type Item = Result<ExampleType, ErrorType>;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
+    fn next(&mut self) -> Option<Self::Item> {
+
         let buf = match self.iter.next() {
             None => return None,
             Some(buf) => buf,
         };
 
-        let mut example = match parser::parse_single_example(&buf) {
+        let example = match parser::parse_single_example(&buf) {
             Err(e) => return Some(Err(Box::new(e))),
             Ok(example) => example,
         };
 
-        let entries: Vec<_> = match self.names_opt {
-            Some(ref names) => {
-                let mut entries = Vec::new();
-                for name in names {
-                    let entry = match example.remove_entry(name.as_ref()) {
-                        Some(entry) => entry,
-                        None => {
-                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", name));
-                            return Some(Err(Box::new(err)));
-                        }
-                    };
-                    entries.push(entry);
-                }
-
-                entries
-            }
-            None => example.into_iter().collect()
+        let (_, entries) = match filter_entries(example, &self.names_opt) {
+            Ok(ret) => ret,
+            Err(err) => return Some(Err(Box::new(err))),
         };
 
         let mut result = HashMap::new();
-
         for (name, value) in entries {
-            let parsed_value: Box<dyn Any + Sync + Send> = match value {
+            let parsed_value: FeatureType = match value {
                 parser::FeatureList::Bytes(val) => Box::new(val),
                 parser::FeatureList::F32(val) => Box::new(val),
                 parser::FeatureList::I64(val) => Box::new(val),
@@ -333,7 +612,7 @@ macro_rules! try_convert_vec_vec_to_torch (
 impl<I, S> ToTorchTensor<I, S> where
     S: AsRef<str> {
 
-    fn try_convert_to_tensor(name: &str, value_ref: Box<dyn Any + Sync + Send>) -> Result<Box<dyn Any>, Box<dyn Debug + Sync + Send>> {
+    fn try_convert_to_tensor(name: &str, value_ref: FeatureType) -> Result<Box<dyn Any>, ErrorType> {
 
         // TODO: optimize type matching
         try_convert_vec_to_torch!(value_ref, u8);
@@ -451,40 +730,25 @@ impl<I, S> ToTorchTensor<I, S> where
 }
 
 impl<I, S> Iterator for ToTorchTensor<I, S> where
-    I: Iterator<Item=HashMap<String, Box<dyn Any + Sync + Send>>>,
+    I: Iterator<Item=ExampleType>,
     S: AsRef<str> + Hash + Eq + Display {
-    type Item = Result<HashMap<String, Box<dyn Any>>, Box<dyn Debug + Sync + Send>>;
+    type Item = Result<HashMap<String, Box<dyn Any>>, ErrorType>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut example = match self.iter.next() {
+        let example = match self.iter.next() {
             None => return None,
             Some(example) => example,
         };
 
-        let mut result = HashMap::<String, Box<dyn Any>>::new();
-
-        let entries: Vec<_> = match &self.names_opt {
-            None => example.into_iter().collect(),
-            Some(names) => {
-                let mut entries = Vec::new();
-                for name in names {
-                    let entry = match example.remove_entry(name.as_ref()) {
-                        Some(entry) => entry,
-                        None => {
-                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", name));
-                            return Some(Err(Box::new(err)));
-                        }
-                    };
-                    entries.push(entry);
-                }
-
-                for (name, val) in example.drain() {
-                    result.insert(name, val);
-                }
-
-                entries
-            }
+        let (mut remaining_example, entries) = match filter_entries(example, &self.names_opt) {
+            Ok(ret) => ret,
+            Err(err) => return Some(Err(Box::new(err))),
         };
+
+        let mut result = HashMap::<String, Box<dyn Any>>::new();
+        for (name, val) in remaining_example.drain() {
+            result.insert(name, val);
+        }
 
         for (name, feature_ref) in entries {
             let ret = match Self::try_convert_to_tensor(&name, feature_ref) {
@@ -564,19 +828,19 @@ impl<I, S> Iterator for ToTorchTensor<I, S> where
 
 impl<I, K, V> Iterator for FilterHashMapEntry<I, K> where
     I: Iterator<Item=HashMap<K, V>>,
-    K: Hash + Eq
-{
+    K: Hash + Eq {
+
     type Item = HashMap<K, V>;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        match self.iter.next()
-        {
+    fn next(&mut self) -> Option<Self::Item> {
+
+        match self.iter.next() {
+
             None => None,
             Some(mut index) => {
                 let new_index: HashMap<K, V> = self.keys.iter().filter_map(|query_key| {
-                    match index.remove_entry(&query_key)
-                    {
+                    match index.remove_entry(&query_key) {
+
                         Some((key, value)) => Some((key, value)),
                         None => None,
                     }
@@ -588,14 +852,14 @@ impl<I, K, V> Iterator for FilterHashMapEntry<I, K> where
 }
 
 impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
-    I: Iterator<Item=Result<V, E>>,
-{
+    I: Iterator<Item=Result<V, E>>, {
+
     type Item = V;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        match self.iter.next()
-        {
+    fn next(&mut self) -> Option<Self::Item> {
+
+        match self.iter.next() {
+
             None => None,
             Some(result) => Some(result.ok().unwrap())
         }
@@ -604,14 +868,14 @@ impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
 
 impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
-    E: Debug + Sync + Send,
-{
+    E: Debug + Sync + Send, {
+
     type Item = V;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        match self.iter.next()
-        {
+    fn next(&mut self) -> Option<Self::Item> {
+
+        match self.iter.next() {
+
             None => None,
             Some(result) => Some(result.unwrap())
         }
@@ -619,14 +883,14 @@ impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
 }
 
 impl<I> Iterator for LoadByTfRecordIndex<I> where
-    I: Iterator<Item=loader::RecordIndex>,
-{
+    I: Iterator<Item=loader::RecordIndex>, {
+
     type Item = Result<Vec<u8>, io::Error>;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        match self.iter.next()
-        {
+    fn next(&mut self) -> Option<Self::Item> {
+
+        match self.iter.next() {
+
             None => None,
             Some(index) => match self.loader.fetch(index) {
                 Some(record) => Some(Ok(record)),
@@ -636,252 +900,47 @@ impl<I> Iterator for LoadByTfRecordIndex<I> where
     }
 }
 
-impl<I, S> DecodeImage<I, S> {
-
-    fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Array3<u8>, Box<dyn Debug + Sync + Send>> {
-        let format = match format_opt {
-            Some(format) => format,
-            None => {
-                match image::guess_format(bytes) {
-                    Ok(format) => format,
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-        };
-
-        let (image, (width, height, channels)) = match format {
-            ImageFormat::PNG => {
-                match PNGDecoder::new(bytes) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            ImageFormat::JPEG => {
-                match  Self::decode_jpeg(&bytes) {
-                    Err(err) => return Err(Box::new(err)),
-                    Ok((image, dims)) => (image, dims),
-                }
-            }
-            ImageFormat::GIF => {
-                match GIFDecoder::new(bytes) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            ImageFormat::WEBP => {
-                match WebpDecoder::new(bytes) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            ImageFormat::PNM => {
-                match PNMDecoder::new(bytes) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            ImageFormat::TIFF => {
-                match TIFFDecoder::new(io::Cursor::new(bytes)) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            ImageFormat::TGA => {
-                match TGADecoder::new(io::Cursor::new(bytes)) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            ImageFormat::BMP => {
-                match BMPDecoder::new(io::Cursor::new(bytes)) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            ImageFormat::ICO => {
-                match ICODecoder::new(io::Cursor::new(bytes)) {
-                    Ok(decoder) => {
-                        let (width, height) = decoder.dimensions();
-                        match decoder.read_image() {
-                            Ok(image) => (image, (width as usize, height as usize, 3)),
-                            Err(err) => return Err(Box::new(err)),
-                        }
-                    },
-                    Err(err) => return Err(Box::new(err)),
-                }
-            }
-            _ => {
-                let err = ParseError::new(&format!("Image format is not supported"));
-                return Err(Box::new(err));
-            }
-        };
-
-
-        let array = match ArrayBase::from_shape_vec((width, height, channels), image) {
-            Err(err) => return Err(Box::new(err)),
-            Ok(array) => array,
-        };
-        Ok(array)
-    }
-
-    fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::Error> {
-        catch_unwind(|| -> Result<_, io::Error> {
-            let decompress = mozjpeg::Decompress::with_markers(mozjpeg::ALL_MARKERS)
-                .from_mem(data)?;
-            let (width, height) = decompress.size();
-
-            match decompress.image()? {
-                mozjpeg::Format::RGB(mut dec) => {
-                    let mut pixels = dec.read_scanlines::<(u8, u8, u8)>().unwrap();
-                    let bytes = unsafe {
-                        pixels.set_len(pixels.len() * 3);
-                        transmute::<Vec<(u8, u8, u8)>, Vec<u8>>(pixels)
-                    };
-                    assert!(bytes.len() == width * height * 3);
-                    Ok((bytes, (width, height, 3)))
-                }
-                mozjpeg::Format::Gray(mut dec) => {
-                    let pixels = dec.read_scanlines::<u8>().unwrap();
-                    Ok((pixels, (width, height, 1)))
-                }
-                mozjpeg::Format::CMYK(mut dec) => {
-                    let pixels = dec.read_scanlines::<(u8, u8, u8, u8)>().unwrap();
-                    let bytes = pixels.into_iter()
-                        .flat_map(|(c, m, y, k)| {
-                            let r = ((255_f64 - c as f64) * (255_f64 - k as f64) / 255_f64) as u8;
-                            let g = ((255_f64 - m as f64) * (255_f64 - k as f64) / 255_f64) as u8;
-                            let b = ((255_f64 - y as f64) * (255_f64 - k as f64) / 255_f64) as u8;
-                            vec![r, g, b]
-                        })
-                        .collect::<Vec<u8>>();
-                    Ok((bytes, (width, height, 3)))
-                }
-            }
-        }).unwrap()
-    }
-}
-
 impl<I, S> Iterator for DecodeImage<I, S> where
-    I: Iterator<Item=HashMap<String, Box<dyn Any + Sync + Send>>>,
+    I: Iterator<Item=ExampleType>,
     S: AsRef<str> + Hash + Eq + Display {
 
-    type Item = Result<HashMap<String, Box<dyn Any + Sync + Send>>, Box<dyn Debug + Sync + Send>>;
+    type Item = Result<ExampleType, ErrorType>;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        let mut example = match self.iter.next() {
+    fn next(&mut self) -> Option<Self::Item> {
+        let example = match self.iter.next() {
             None => return None,
             Some(example) => example,
         };
-
-        let mut result = HashMap::<String, Box<dyn Any + Sync + Send>>::new();
-
-        let entries = match &self.formats_opt {
-            Some(formats) => {
-                let mut entries = Vec::new();
-                for (select_name, format_opt) in formats {
-                    let (name, value_ref) = match example.remove_entry(select_name.as_ref()) {
-                        Some(entry) => entry,
-                        None => {
-                            let err = ParseError::new(&format!("Name \"{}\" is not found in example", select_name));
-                            return Some(Err(Box::new(err)));
-                        }
-                    };
-
-                    for (name, val) in example.drain() {
-                        result.insert(name, val);
-                    }
-
-                    entries.push((name, value_ref, format_opt.to_owned()));
-                }
-                entries
-            }
-            None => example.into_iter().map(|(name, val)| (name, val, None)).collect(),
-        };
-
-        for (name, value_ref, format_opt) in entries
-        {
-            if let Some(bytes) = value_ref.downcast_ref::<Vec<u8>>() {
-                let image = match Self::try_decode_image(bytes, format_opt) {
-                    Err(err) => return Some(Err(err)),
-                    Ok(image) => image,
-                };
-                result.insert(name, Box::new(image));
-            }
-            else if let Some(bytes_list) = value_ref.downcast_ref::<Vec<Vec<u8>>>() {
-                if bytes_list.is_empty() {
-                    let err = ParseError::new(&format!("Cannot decode empty bytes list with name \"{}\"", name));
-                    return Some(Err(Box::new(err)));
-                }
-
-                let mut images = Vec::new();
-                for bytes in bytes_list {
-                    let image = match Self::try_decode_image(bytes, format_opt) {
-                        Err(err) => return Some(Err(err)),
-                        Ok(image) => image,
-                    };
-                    images.push(image);
-                }
-                result.insert(name, Box::new(images));
-            }
-            else {
-                let err = ParseError::new(&format!("Cannot decode non-bytes list feature with name \"{}\"", name));
-                return Some(Err(Box::new(err)));
-            }
-        }
-
-        Some(Ok(result))
+        Some(decode_image_on_example(example, &self.formats_opt))
     }
 }
 
-impl<I> Iterator for Shuffle<I> where
+impl Iterator for ParallelDecodeImage {
+
+    type Item = Result<ExampleType, ErrorType>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        match self.receiver.recv().unwrap() {
+            None => {
+                self.finished = true;
+                None
+            }
+            Some(val) => Some(val),
+        }
+    }
+}
+
+
+impl<I, R> Iterator for Shuffle<I, R> where
     I: Iterator,
-{
+    R: rand::Rng {
     type Item = I::Item;
-    fn next(&mut self) -> Option<Self::Item>
-    {
+    fn next(&mut self) -> Option<Self::Item> {
+
         let capacity = self.buffer.capacity();
         if capacity > 0 {
             while self.buffer.len() < capacity {
@@ -910,17 +969,14 @@ impl<I> Iterator for Prefetch<I> where
 
     type Item = I::Item;
 
-    fn next(&mut self) -> Option<Self::Item>
-    {
-        match self.worker_opt {
-            None => return None,
-            _ => {}
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
         }
 
         match self.receiver.recv().unwrap() {
             None => {
-                let worker = self.worker_opt.take().unwrap();
-                worker.join().unwrap();
+                self.finished = true;
                 None
             }
             Some(val) => Some(val),

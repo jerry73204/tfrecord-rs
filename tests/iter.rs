@@ -50,10 +50,34 @@ fn decode_image_test() -> Result<(), Box<dyn Error>>
 
     let loader = SeqLoader::load(path)?;
     let record_cnt = loader
-        .take(50000)
         .to_tf_example(Some(hashset!("frames")))
         .unwrap_result()
         .decode_image(Some(hashmap!("frames" => None)))
+        .unwrap_result()
+        .fold(0, |mut cnt, example| {
+            let keys: Vec<_> = example.keys().into_iter().collect();
+            assert!(keys.len() == 1);
+            example["frames"].downcast_ref::<Vec<Array3<u8>>>().unwrap();
+
+            cnt += 1;
+            cnt
+        });
+    assert!(record_cnt == 100);
+    Ok(())
+}
+
+#[test]
+fn parallel_decode_image_test() -> Result<(), Box<dyn Error>>
+{
+    // Prepare file
+    // The tfrecord is published DeepMind's GQN dataset
+    let path = Path::new("./test_files/rooms_free_camera_with_object_rotations.tfrecords");
+
+    let loader = SeqLoader::load(path)?;
+    let record_cnt = loader
+        .to_tf_example(Some(hashset!("frames")))
+        .unwrap_result()
+        .par_decode_image(Some(hashmap!("frames" => None)), 4096)
         .unwrap_result()
         .fold(0, |mut cnt, example| {
             let keys: Vec<_> = example.keys().into_iter().collect();
@@ -74,7 +98,6 @@ fn torch_tensor_test() -> Result<(), Box<dyn Error>>
     let path = Path::new("./test_files/rooms_free_camera_with_object_rotations.tfrecords");
     let loader = SeqLoader::load(path)?;
     let record_cnt = loader
-        .take(50000)
         .to_tf_example(None)
         .unwrap_result()
         .decode_image(Some(hashmap!("frames" => None)))
