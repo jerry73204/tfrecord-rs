@@ -329,7 +329,7 @@ pub trait DsIterator: Iterator + Sized {
                 .map(move |example| decode_image_on_example(example, &formats_opt));
 
             iter.for_each(|val| {
-                debug!("{} elements buffered in parallel image decoding queue", sender.len());
+                debug!("{} elements buffered in parallel image decoding queue (producer)", sender.len());
                 sender.send(Some(val)).unwrap();
             });
             sender.send(None).unwrap();
@@ -407,7 +407,7 @@ pub trait DsIterator: Iterator + Sized {
         rayon::spawn(move || {
             debug!("Producer thread started for prefetch()");
             loop {
-                debug!("{} elements buffered in prefetch queue", sender.len());
+                debug!("{} elements buffered in prefetch queue (sender)", sender.len());
                 match self.next() {
                     None => {
                         sender.send(None).unwrap();
@@ -931,6 +931,7 @@ impl Iterator for ParallelDecodeImage {
             return None;
         }
 
+        debug!("{} elements buffered in parallel image decoding queue (consumer)", self.receiver.len());
         match self.receiver.recv().unwrap() {
             None => {
                 debug!("Reach end of stream and stop parallel image decoding");
@@ -948,7 +949,6 @@ impl<I, R> Iterator for Shuffle<I, R> where
     R: rand::Rng {
     type Item = I::Item;
     fn next(&mut self) -> Option<Self::Item> {
-
         let capacity = self.buffer.capacity();
         if capacity > 0 {
             while self.buffer.len() < capacity {
@@ -963,6 +963,7 @@ impl<I, R> Iterator for Shuffle<I, R> where
                 }
             }
 
+            debug!("{} elements in shuffle buffer", self.buffer.len());
             self.buffer.pop_back()
         }
         else {
@@ -982,6 +983,7 @@ impl<I> Iterator for Prefetch<I> where
             return None;
         }
 
+        debug!("{} elements buffered in prefetch queue (consumer)", self.receiver.len());
         match self.receiver.recv().unwrap() {
             None => {
                 debug!("Reach end of stream and stop prefetching");
