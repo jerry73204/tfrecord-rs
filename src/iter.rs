@@ -329,6 +329,7 @@ pub trait DsIterator: Iterator + Sized {
                 .map(move |example| decode_image_on_example(example, &formats_opt));
 
             iter.for_each(|val| {
+                debug!("{} elements buffered in parallel image decoding queue", sender.len());
                 sender.send(Some(val)).unwrap();
             });
             sender.send(None).unwrap();
@@ -406,6 +407,7 @@ pub trait DsIterator: Iterator + Sized {
         rayon::spawn(move || {
             debug!("Producer thread started for prefetch()");
             loop {
+                debug!("{} elements buffered in prefetch queue", sender.len());
                 match self.next() {
                     None => {
                         sender.send(None).unwrap();
@@ -931,6 +933,7 @@ impl Iterator for ParallelDecodeImage {
 
         match self.receiver.recv().unwrap() {
             None => {
+                debug!("Reach end of stream and stop parallel image decoding");
                 self.finished = true;
                 None
             }
@@ -981,6 +984,7 @@ impl<I> Iterator for Prefetch<I> where
 
         match self.receiver.recv().unwrap() {
             None => {
+                debug!("Reach end of stream and stop prefetching");
                 self.finished = true;
                 None
             }
