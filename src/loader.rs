@@ -27,13 +27,12 @@ fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>,
         Ok(0) => Ok(None),
         Ok(n) if n == len_buf.len() => {
             let len = (&len_buf[..]).read_u64::<LittleEndian>()?;
+            debug!("Get record length {}", len);
 
             if check_integrity {
-
                 let answer_cksum = reader.read_u32::<LittleEndian>()?;
                 let len_cksum = checksum(&len_buf);
                 if answer_cksum == len_cksum {
-
                     Ok(Some(len))
                 }
                 else {
@@ -79,14 +78,14 @@ pub fn build_indexes_from_paths(
     parallel: bool,
 ) -> Result<Vec<(Arc<PathBuf>, Vec<(usize, usize)>)>, io::Error> {
 
-    let load_file = |path| -> Result<_, io::Error> {
+    let load_file = |path: PathBuf| -> Result<_, io::Error> {
+        debug!("Loading index on \"{}\"", path.display());
         let mut file = BufReader::new(File::open(&path)?);
         let index = build_index_from_reader(&mut file, check_integrity)?;
         Ok((Arc::new(path), index))
     };
 
     let indexes = if parallel {
-
         let indexes_result: Result<Vec<_>, io::Error> = paths.into_par_iter()
             .map(load_file)
             .collect();
@@ -696,16 +695,16 @@ impl Iterator for SeqLoader {
     type Item = Vec<u8>;
 
     fn next(&mut self) -> Option<Self::Item> {
-
         let (mut file, len) = loop {
-
             match &mut self.file_opt {
-
                 None => {
                     match self.paths_iter.next() {
-
-                        None => return None,
+                        None => {
+                            debug!("SeqLoader finished");
+                            return None;
+                        }
                         Some(path) => {
+                            debug!("Opening \"{}\"", path.display());
                             self.file_opt = Some(fs::File::open(path).unwrap());
                             continue
                         }
@@ -713,9 +712,9 @@ impl Iterator for SeqLoader {
                 }
                 Some(ref mut file) => {
                     match try_read_len(file, self.options.check_integrity).unwrap() {
-
                         Some(len) => break (file, len),
                         None => {
+                            debug!("Reach EOF and close file");
                             self.file_opt = None;
                             continue
                         }
@@ -738,9 +737,7 @@ impl Iterator for IndexIter {
     type Item = RecordIndex;
 
     fn next(&mut self) -> Option<Self::Item> {
-
         if self.cursor < self.indexes.len() {
-
             let ret = self.indexes[self.cursor];
             self.cursor += 1;
             Some(ret)
@@ -757,7 +754,6 @@ impl Iterator for IndexRecordIter {
     type Item = Vec<u8>;
 
     fn next(&mut self) -> Option<Self::Item> {
-
         let loader = Arc::get_mut(&mut self.loader_rc).unwrap();
         let indexes = loader.get_indexes();
         if self.cursor < indexes.len() {

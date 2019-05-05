@@ -8,6 +8,7 @@ extern crate rayon;
 extern crate lru;
 extern crate crossbeam;
 extern crate mozjpeg;
+#[macro_use] extern crate log;
 
 mod from_tf;
 pub mod loader;

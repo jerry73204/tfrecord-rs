@@ -1,5 +1,4 @@
 use std::io::{self, Cursor};
-use std::thread::{self, JoinHandle};
 use std::cmp::Eq;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -324,6 +323,8 @@ pub trait DsIterator: Iterator + Sized {
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
         rayon::spawn(move || {
+            debug!("Consumer thread started for decode_image()");
+
             let iter = self.par_bridge()
                 .map(move |example| decode_image_on_example(example, &formats_opt));
 
@@ -331,6 +332,8 @@ pub trait DsIterator: Iterator + Sized {
                 sender.send(Some(val)).unwrap();
             });
             sender.send(None).unwrap();
+
+            debug!("Consumer thread ended for decode_image()");
         });
 
         ParallelDecodeImage {
@@ -401,10 +404,12 @@ pub trait DsIterator: Iterator + Sized {
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
         rayon::spawn(move || {
+            debug!("Producer thread started for prefetch()");
             loop {
                 match self.next() {
                     None => {
                         sender.send(None).unwrap();
+                        debug!("Producer thread ended for prefetch()");
                         return;
                     }
                     Some(val) => {
