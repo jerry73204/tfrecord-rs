@@ -1,4 +1,5 @@
 use std::io::{self, Cursor};
+use std::thread::{self, JoinHandle};
 use std::cmp::Eq;
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -322,7 +323,7 @@ pub trait DsIterator: Iterator + Sized {
 
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
-        rayon::spawn(move || {
+        let worker = thread::spawn(move || {
             debug!("Consumer thread started for decode_image()");
 
             let iter = self.par_bridge()
@@ -338,8 +339,8 @@ pub trait DsIterator: Iterator + Sized {
         });
 
         ParallelDecodeImage {
+            worker_opt: Some(worker),
             receiver,
-            finished: false,
         }
     }
 
@@ -404,7 +405,7 @@ pub trait DsIterator: Iterator + Sized {
 
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
-        rayon::spawn(move || {
+        let worker = thread::spawn(move || {
             debug!("Producer thread started for prefetch()");
             loop {
                 debug!("{} elements buffered in prefetch queue (sender)", sender.len());
@@ -422,8 +423,8 @@ pub trait DsIterator: Iterator + Sized {
         });
 
         Prefetch {
+            worker_opt: Some(worker),
             receiver,
-            finished: false,
         }
     }
 
@@ -488,10 +489,9 @@ pub struct DecodeImage<I, S> {
     iter: I,
 }
 
-#[derive(Clone)]
 pub struct ParallelDecodeImage {
     receiver: Receiver<Option<Result<ExampleType, ErrorType>>>,
-    finished: bool,
+    worker_opt: Option<JoinHandle<()>>,
 }
 
 #[derive(Clone)]
@@ -504,7 +504,7 @@ pub struct Shuffle<I: Iterator, R: rand::Rng> {
 pub struct Prefetch<I: Iterator> {
 
     receiver: Receiver<Option<I::Item>>,
-    finished: bool,
+    worker_opt: Option<JoinHandle<()>>,
 }
 
 pub struct LoadByTfRecordIndex<I> {
@@ -927,7 +927,7 @@ impl Iterator for ParallelDecodeImage {
     type Item = Result<ExampleType, ErrorType>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
+        if let None = self.worker_opt {
             return None;
         }
 
@@ -935,7 +935,7 @@ impl Iterator for ParallelDecodeImage {
         match self.receiver.recv().unwrap() {
             None => {
                 debug!("Reach end of stream and stop parallel image decoding");
-                self.finished = true;
+                self.worker_opt.take().unwrap().join();
                 None
             }
             Some(val) => Some(val),
@@ -979,7 +979,7 @@ impl<I> Iterator for Prefetch<I> where
     type Item = I::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished {
+        if let None = self.worker_opt {
             return None;
         }
 
@@ -987,7 +987,7 @@ impl<I> Iterator for Prefetch<I> where
         match self.receiver.recv().unwrap() {
             None => {
                 debug!("Reach end of stream and stop prefetching");
-                self.finished = true;
+                self.worker_opt.take().unwrap().join();
                 None
             }
             Some(val) => Some(val),
