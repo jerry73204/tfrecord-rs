@@ -22,21 +22,17 @@ use crate::{ExampleType, FeatureType, ErrorType, NonSyncExampleType};
 use crate::parser;
 use crate::error::ParseError;
 
-pub fn bytes_to_example<'a, B, N>(buf: B, names_opt: Option<N>) -> Result<ExampleType, ErrorType> where
-    B: Borrow<[u8]>,
-    N: Borrow<&'a [&'a str]>,
+pub fn bytes_to_example<'a, B>(
+    buf: &[u8],
+    names_opt: Option<&[&str]>
+) -> Result<ExampleType, ErrorType>
 {
     let example = match parser::parse_single_example(buf.borrow()) {
         Err(e) => return Err(Box::new(e)),
         Ok(example) => example,
     };
 
-    let names = match names_opt {
-        Some(names) => Some(*names.borrow()),
-        None => None,
-    };
-
-    let (_, entries) = match filter_entries(example, names) {
+    let (_, entries) = match filter_entries(example, names_opt) {
         Ok(ret) => ret,
         Err(err) => return Err(Box::new(err)),
     };
@@ -55,19 +51,17 @@ pub fn bytes_to_example<'a, B, N>(buf: B, names_opt: Option<N>) -> Result<Exampl
     Ok(result)
 }
 
-pub fn filter_entries<'a, V, N>(
+pub fn filter_entries<V>(
     mut map: HashMap<String, V>,
-    names_opt: Option<N>
-) -> Result<(HashMap<String, V>, Vec<(String, V)>), ParseError> where
-    N: Borrow<&'a [&'a str]>,
+    names_opt: Option<&[&str]>
+) -> Result<(HashMap<String, V>, Vec<(String, V)>), ParseError>
 {
     let mut new_map = HashMap::new();
     let entries: Vec<_> = match names_opt {
         Some(names) => {
             let mut entries = Vec::new();
-            for name in *names.borrow() {
-                let name_ref: &str = name;
-                let entry = match map.remove_entry(name_ref) {
+            for name in names {
+                let entry = match map.remove_entry(name as &str) {
                     Some(entry) => entry,
                     None => {
                         let err = ParseError::new(&format!("Feature with name \"{}\" is not found", name));
@@ -494,15 +488,9 @@ pub fn try_convert_to_tensor(name: &str, value_ref: FeatureType) -> Result<Box<d
 
 pub fn example_to_torch_tensor<'a, S, N>(
     example: ExampleType,
-    names_opt: Option<N>) -> Result<NonSyncExampleType, ErrorType> where
-    N: Borrow<&'a [&'a str]>,
+    names_opt: Option<&[&str]>) -> Result<NonSyncExampleType, ErrorType>
 {
-    let names = match names_opt {
-        Some(names) => Some(*names.borrow()),
-        None => None,
-    };
-
-    let (mut remaining_example, entries) = match filter_entries(example, names) {
+    let (mut remaining_example, entries) = match filter_entries(example, names_opt) {
         Ok(ret) => ret,
         Err(err) => return Err(Box::new(err)),
     };
