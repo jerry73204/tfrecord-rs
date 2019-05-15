@@ -22,7 +22,7 @@ use crate::{ExampleType, FeatureType, ErrorType, NonSyncExampleType};
 use crate::parser;
 use crate::error::ParseError;
 
-pub fn bytes_to_example<'a, B>(
+pub fn bytes_to_example<'a>(
     buf: &[u8],
     names_opt: Option<&[&str]>
 ) -> Result<ExampleType, ErrorType>
