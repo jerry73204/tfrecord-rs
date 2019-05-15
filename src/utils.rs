@@ -247,7 +247,7 @@ pub fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::
 
 pub fn decode_image_on_example<S>(
     mut example: ExampleType,
-    formats_opt: Option<&[(S, Option<ImageFormat>)]>,
+    formats_opt: Option<HashMap<S, Option<ImageFormat>>>,
 ) -> Result<ExampleType, ErrorType> where
     S: AsRef<str> + Hash + Eq + Display
 {
