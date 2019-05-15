@@ -491,14 +491,12 @@ impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader {
                 .filter_map(|entry_ret| {
                     let entry = entry_ret.unwrap();
                     let meta = entry.metadata().unwrap();
-                    let fname = entry.file_name().into_string().unwrap();
+                    // let fname = entry.file_name().into_string().unwrap();
 
                     if meta.is_file() {
-
                         Some(entry.path())
                     }
                     else {
-
                         None
                     }
 
@@ -643,14 +641,12 @@ impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader {
                 .filter_map(|entry_ret| {
                     let entry = entry_ret.unwrap();
                     let meta = entry.metadata().unwrap();
-                    let fname = entry.file_name().into_string().unwrap();
+                    // let fname = entry.file_name().into_string().unwrap();
 
                     if meta.is_file() {
-
                         Some(entry.path())
                     }
                     else {
-
                         None
                     }
 
