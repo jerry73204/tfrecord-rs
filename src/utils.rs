@@ -485,9 +485,10 @@ pub fn try_convert_to_tensor(name: &str, value_ref: FeatureType) -> Result<Box<d
 }
 
 
-pub fn example_to_torch_tensor<'a, S, N>(
+pub fn example_to_torch_tensor(
     example: ExampleType,
-    names_opt: Option<&[&str]>) -> Result<NonSyncExampleType, ErrorType>
+    names_opt: Option<&[&str]>
+) -> Result<NonSyncExampleType, ErrorType>
 {
     let (mut remaining_example, entries) = match filter_entries(example, names_opt) {
         Ok(ret) => ret,
