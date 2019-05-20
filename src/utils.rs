@@ -316,8 +316,7 @@ macro_rules! try_convert_array_to_torch (
             Some(val) => {
                 let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
                 let tensor = tch::Tensor::of_slice(val.as_slice().unwrap());
-                tensor.view(&dims);
-                return Ok(Box::new(tensor));
+                return Ok(Box::new(tensor.view(&dims)));
             }
         }
     )
@@ -332,8 +331,7 @@ macro_rules! try_convert_array_vec_to_torch (
                     .map(|val| {
                         let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
                         let tensor = tch::Tensor::of_slice(val.as_slice().unwrap());
-                        tensor.view(&dims);
-                        tensor
+                        tensor.view(&dims)
                     })
                     .collect::<Vec<_>>();
                 return Ok(Box::new(tensor_list));
