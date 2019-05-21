@@ -6,7 +6,7 @@ use std::hash::Hash;
 use std::mem::transmute;
 use std::panic::catch_unwind;
 use std::fmt::Display;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use ndarray::{ArrayBase, Array1, Array2, Array3, Array4, ArrayView1, ArrayView2, ArrayView3, ArrayView4};
 use tch;
 use image::{ImageFormat, ImageDecoder};
@@ -24,7 +24,7 @@ use crate::error::ParseError;
 
 pub fn bytes_to_example<'a>(
     buf: &[u8],
-    names_opt: Option<&[&str]>
+    names_opt: Option<HashSet<&str>>
 ) -> Result<ExampleType, ErrorType>
 {
     let example = match parser::parse_single_example(buf.borrow()) {
@@ -53,7 +53,7 @@ pub fn bytes_to_example<'a>(
 
 pub fn filter_entries<V>(
     mut map: HashMap<String, V>,
-    names_opt: Option<&[&str]>
+    names_opt: Option<HashSet<&str>>
 ) -> Result<(HashMap<String, V>, Vec<(String, V)>), ParseError>
 {
     let mut new_map = HashMap::new();
@@ -485,7 +485,7 @@ fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device
 
 pub fn example_to_torch_tensor(
     example: ExampleType,
-    names_opt: Option<&[&str]>,
+    names_opt: Option<HashSet<&str>>,
     device: tch::Device,
 ) -> Result<NonSyncExampleType, ErrorType>
 {
