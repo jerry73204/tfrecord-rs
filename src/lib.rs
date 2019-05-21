@@ -21,12 +21,10 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+pub type FeatureType = Box<dyn Any + Sync + Send>;
+pub type ErrorType = Box<dyn Debug + Sync + Send>;
+pub type ExampleType = HashMap<String, FeatureType>;
 
-type FeatureType = Box<dyn Any + Sync + Send>;
-type ErrorType = Box<dyn Debug + Sync + Send>;
-type ExampleType = HashMap<String, FeatureType>;
-
-
-type NonSyncFeatureType = Box<dyn Any>;
-type NonSyncErrorType = Box<dyn Debug>;
-type NonSyncExampleType = HashMap<String, NonSyncFeatureType>;
+pub type NonSyncFeatureType = Box<dyn Any>;
+pub type NonSyncErrorType = Box<dyn Debug>;
+pub type NonSyncExampleType = HashMap<String, NonSyncFeatureType>;
