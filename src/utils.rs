@@ -7,7 +7,7 @@ use std::mem::transmute;
 use std::panic::catch_unwind;
 use std::fmt::Display;
 use std::collections::{HashMap, HashSet};
-// use ndarray::{ArrayBase, Array1, Array2, Array3, Array4, ArrayView1, ArrayView2, ArrayView3, ArrayView4};
+use ndarray::{Array1, Array2, Array3, Array4, ArrayView1, ArrayView2, ArrayView3, ArrayView4};
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
@@ -81,7 +81,7 @@ pub fn filter_entries<V>(
 }
 
 
-fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<(Vec<u8>, Vec<usize>), ErrorType> {
+fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Array3<u8>, ErrorType> {
     let format = match format_opt {
         Some(format) => format,
         None => {
@@ -201,12 +201,12 @@ fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<(Ve
         }
     };
 
-    // let array = match ArrayBase::from_shape_vec((width, height, channels), image) {
-    //     Err(err) => return Err(Box::new(err)),
-    //     Ok(array) => array,
-    // };
-    // Ok(array)
-    Ok((image, vec![height, width, channels]))
+    let array = match Array3::from_shape_vec((width, height, channels), image) {
+        Err(err) => return Err(Box::new(err)),
+        Ok(array) => array,
+    };
+    Ok(array)
+    // Ok((image, vec![height, width, channels]))
 }
 
 fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::Error> {
@@ -277,11 +277,11 @@ pub fn decode_image_on_example<S>(
 
     for (name, value_ref, format_opt) in entries {
         if let Some(bytes) = value_ref.downcast_ref::<Vec<u8>>() {
-            let (image, shape) = match try_decode_image(bytes, format_opt) {
+            let array = match try_decode_image(bytes, format_opt) {
                 Err(err) => return Err(err),
                 Ok(ret) => ret,
             };
-            result.insert(name, Box::new((image, shape)));
+            result.insert(name, Box::new(array));
         }
         else if let Some(bytes_list) = value_ref.downcast_ref::<Vec<Vec<u8>>>() {
             if bytes_list.is_empty() {
@@ -291,11 +291,11 @@ pub fn decode_image_on_example<S>(
 
             let mut images = Vec::new();
             for bytes in bytes_list {
-                let (image, shape) = match try_decode_image(bytes, format_opt) {
+                let array = match try_decode_image(bytes, format_opt) {
                     Err(err) => return Err(err),
                     Ok(ret) => ret,
                 };
-                images.push((image, shape));
+                images.push(array);
             }
             result.insert(name, Box::new(images));
         }
@@ -308,65 +308,29 @@ pub fn decode_image_on_example<S>(
     Ok(result)
 }
 
-// macro_rules! try_convert_array_to_torch (
-//     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
-//         match $value_ref.downcast_ref::<$dtype>() {
-//             None => {}
-//             Some(val) => {
-//                 let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
-//                 let tensor = tch::Tensor::of_slice(val.as_slice().unwrap()).to_device($device);
-//                 return Ok(Box::new(tensor.view(&dims)));
-//             }
-//         }
-//     )
-// );
-
-// macro_rules! try_convert_array_vec_to_torch (
-//     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
-//         match $value_ref.downcast_ref::<Vec<$dtype>>() {
-//             None => {}
-//             Some(list) => {
-//                 let tensor_list = list.into_iter()
-//                     .map(|val| {
-//                         let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
-//                         let tensor = tch::Tensor::of_slice(val.as_slice().unwrap()).to_device($device);
-//                         tensor.view(&dims)
-//                     })
-//                     .collect::<Vec<_>>();
-//                 return Ok(Box::new(tensor_list));
-//             }
-//         }
-//     )
-// );
-
-
-macro_rules! try_convert_shaped_vec_to_torch (
+macro_rules! try_convert_array_to_torch (
     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
-        match $value_ref.downcast_ref::<(Vec<$dtype>, Vec<usize>)>() {
+        match $value_ref.downcast_ref::<$dtype>() {
             None => {}
-            Some((buf, shape)) => {
-                let tch_shape: Vec<_> = shape.into_iter().map(|v| *v as i64).collect();
-                return Ok(Box::new(
-                    tch::Tensor::of_slice(buf)
-                        .to_device($device)
-                        .view(&tch_shape)
-                ));
+            Some(val) => {
+                let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
+                let tensor = tch::Tensor::of_slice(val.as_slice().unwrap()).to_device($device);
+                return Ok(Box::new(tensor.view(&dims)));
             }
         }
     )
 );
 
-macro_rules! try_convert_vec_shaped_vec_to_torch (
+macro_rules! try_convert_array_vec_to_torch (
     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
-        match $value_ref.downcast_ref::<Vec<(Vec<$dtype>, Vec<usize>)>>() {
+        match $value_ref.downcast_ref::<Vec<$dtype>>() {
             None => {}
             Some(list) => {
                 let tensor_list = list.into_iter()
-                    .map(|(buf, shape)| {
-                        let tch_shape: Vec<_> = shape.into_iter().map(|v| *v as i64).collect();
-                        tch::Tensor::of_slice(buf)
-                            .to_device($device)
-                            .view(&tch_shape)
+                    .map(|val| {
+                        let dims = val.shape().into_iter().map(|v| *v as i64).collect::<Vec<_>>();
+                        let tensor = tch::Tensor::of_slice(val.as_slice().unwrap()).to_device($device);
+                        tensor.view(&dims)
                     })
                     .collect::<Vec<_>>();
                 return Ok(Box::new(tensor_list));
@@ -374,6 +338,42 @@ macro_rules! try_convert_vec_shaped_vec_to_torch (
         }
     )
 );
+
+
+// macro_rules! try_convert_shaped_vec_to_torch (
+//     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
+//         match $value_ref.downcast_ref::<(Vec<$dtype>, Vec<usize>)>() {
+//             None => {}
+//             Some((buf, shape)) => {
+//                 let tch_shape: Vec<_> = shape.into_iter().map(|v| *v as i64).collect();
+//                 return Ok(Box::new(
+//                     tch::Tensor::of_slice(buf)
+//                         .to_device($device)
+//                         .view(&tch_shape)
+//                 ));
+//             }
+//         }
+//     )
+// );
+
+// macro_rules! try_convert_vec_shaped_vec_to_torch (
+//     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
+//         match $value_ref.downcast_ref::<Vec<(Vec<$dtype>, Vec<usize>)>>() {
+//             None => {}
+//             Some(list) => {
+//                 let tensor_list = list.into_iter()
+//                     .map(|(buf, shape)| {
+//                         let tch_shape: Vec<_> = shape.into_iter().map(|v| *v as i64).collect();
+//                         tch::Tensor::of_slice(buf)
+//                             .to_device($device)
+//                             .view(&tch_shape)
+//                     })
+//                     .collect::<Vec<_>>();
+//                 return Ok(Box::new(tensor_list));
+//             }
+//         }
+//     )
+// );
 
 macro_rules! try_convert_vec_to_torch (
     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
@@ -415,114 +415,113 @@ fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device
     try_convert_vec_vec_to_torch!(value_ref, device, f32);
     try_convert_vec_vec_to_torch!(value_ref, device, f64);
 
-    try_convert_shaped_vec_to_torch!(value_ref, device, u8);
-    try_convert_shaped_vec_to_torch!(value_ref, device, i32);
-    try_convert_shaped_vec_to_torch!(value_ref, device, i64);
-    try_convert_shaped_vec_to_torch!(value_ref, device, f32);
-    try_convert_shaped_vec_to_torch!(value_ref, device, f64);
+    // try_convert_shaped_vec_to_torch!(value_ref, device, u8);
+    // try_convert_shaped_vec_to_torch!(value_ref, device, i32);
+    // try_convert_shaped_vec_to_torch!(value_ref, device, i64);
+    // try_convert_shaped_vec_to_torch!(value_ref, device, f32);
+    // try_convert_shaped_vec_to_torch!(value_ref, device, f64);
 
-    try_convert_vec_shaped_vec_to_torch!(value_ref, device, u8);
-    try_convert_vec_shaped_vec_to_torch!(value_ref, device, i32);
-    try_convert_vec_shaped_vec_to_torch!(value_ref, device, i64);
-    try_convert_vec_shaped_vec_to_torch!(value_ref, device, f32);
-    try_convert_vec_shaped_vec_to_torch!(value_ref, device, f64);
+    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, u8);
+    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, i32);
+    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, i64);
+    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, f32);
+    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, f64);
 
-    // try_convert_array_to_torch!(value_ref, device, Array1<u8>);
-    // try_convert_array_to_torch!(value_ref, device, Array1<f32>);
-    // try_convert_array_to_torch!(value_ref, device, Array1<f64>);
-    // try_convert_array_to_torch!(value_ref, device, Array1<i32>);
-    // try_convert_array_to_torch!(value_ref, device, Array1<i64>);
+    try_convert_array_to_torch!(value_ref, device, Array1<u8>);
+    try_convert_array_to_torch!(value_ref, device, Array1<f32>);
+    try_convert_array_to_torch!(value_ref, device, Array1<f64>);
+    try_convert_array_to_torch!(value_ref, device, Array1<i32>);
+    try_convert_array_to_torch!(value_ref, device, Array1<i64>);
 
-    // try_convert_array_to_torch!(value_ref, device, Array2<u8>);
-    // try_convert_array_to_torch!(value_ref, device, Array2<f32>);
-    // try_convert_array_to_torch!(value_ref, device, Array2<f64>);
-    // try_convert_array_to_torch!(value_ref, device, Array2<i32>);
-    // try_convert_array_to_torch!(value_ref, device, Array2<i64>);
+    try_convert_array_to_torch!(value_ref, device, Array2<u8>);
+    try_convert_array_to_torch!(value_ref, device, Array2<f32>);
+    try_convert_array_to_torch!(value_ref, device, Array2<f64>);
+    try_convert_array_to_torch!(value_ref, device, Array2<i32>);
+    try_convert_array_to_torch!(value_ref, device, Array2<i64>);
 
-    // try_convert_array_to_torch!(value_ref, device, Array3<u8>);
-    // try_convert_array_to_torch!(value_ref, device, Array3<f32>);
-    // try_convert_array_to_torch!(value_ref, device, Array3<f64>);
-    // try_convert_array_to_torch!(value_ref, device, Array3<i32>);
-    // try_convert_array_to_torch!(value_ref, device, Array3<i64>);
+    try_convert_array_to_torch!(value_ref, device, Array3<u8>);
+    try_convert_array_to_torch!(value_ref, device, Array3<f32>);
+    try_convert_array_to_torch!(value_ref, device, Array3<f64>);
+    try_convert_array_to_torch!(value_ref, device, Array3<i32>);
+    try_convert_array_to_torch!(value_ref, device, Array3<i64>);
 
-    // try_convert_array_to_torch!(value_ref, device, Array4<u8>);
-    // try_convert_array_to_torch!(value_ref, device, Array4<f32>);
-    // try_convert_array_to_torch!(value_ref, device, Array4<f64>);
-    // try_convert_array_to_torch!(value_ref, device, Array4<i32>);
-    // try_convert_array_to_torch!(value_ref, device, Array4<i64>);
+    try_convert_array_to_torch!(value_ref, device, Array4<u8>);
+    try_convert_array_to_torch!(value_ref, device, Array4<f32>);
+    try_convert_array_to_torch!(value_ref, device, Array4<f64>);
+    try_convert_array_to_torch!(value_ref, device, Array4<i32>);
+    try_convert_array_to_torch!(value_ref, device, Array4<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, Array1<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array1<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array1<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array1<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array1<i64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array1<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array1<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array1<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array1<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array1<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, Array2<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array2<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array2<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array2<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array2<i64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array2<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array2<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array2<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array2<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array2<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, Array3<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array3<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array3<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array3<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array3<i64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array3<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array3<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array3<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array3<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array3<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, Array4<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array4<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array4<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array4<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, Array4<i64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array4<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array4<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array4<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array4<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array4<i64>);
 
-    // try_convert_array_to_torch!(value_ref, device, ArrayView1<u8>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView1<f32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView1<f64>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView1<i32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView1<i64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView1<u8>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView1<f32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView1<f64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView1<i32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView1<i64>);
 
-    // try_convert_array_to_torch!(value_ref, device, ArrayView2<u8>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView2<f32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView2<f64>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView2<i32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView2<i64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView2<u8>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView2<f32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView2<f64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView2<i32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView2<i64>);
 
-    // try_convert_array_to_torch!(value_ref, device, ArrayView3<u8>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView3<f32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView3<f64>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView3<i32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView3<i64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView3<u8>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView3<f32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView3<f64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView3<i32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView3<i64>);
 
-    // try_convert_array_to_torch!(value_ref, device, ArrayView4<u8>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView4<f32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView4<f64>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView4<i32>);
-    // try_convert_array_to_torch!(value_ref, device, ArrayView4<i64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView4<u8>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView4<f32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView4<f64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView4<i32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayView4<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<i64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView1<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<i64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView2<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<i64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView3<i64>);
 
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<u8>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<f32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<f64>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<i32>);
-    // try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<i64>);
-
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayView4<i64>);
 
     let err = ParseError::new(&format!("The type of feature with name \"{}\" is not supported to convert to Torch Tensor", name));
     Err(Box::new(err))
