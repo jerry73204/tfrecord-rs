@@ -7,7 +7,8 @@ use std::mem::transmute;
 use std::panic::catch_unwind;
 use std::fmt::Display;
 use std::collections::{HashMap, HashSet};
-use ndarray::{Array1, Array2, Array3, Array4, ArrayView1, ArrayView2, ArrayView3, ArrayView4};
+use ndarray::{ArrayD, Array1, Array2, Array3, Array4,
+              ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4};
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
@@ -312,13 +313,13 @@ macro_rules! try_convert_array_to_torch (
         match $value_ref.downcast_ref::<$dtype>() {
             None => {}
             Some(val) => {
-                let dims = val.shape()
+                let dims = &val.shape()
                     .into_iter()
                     .map(|v| *v as i64)
                     .collect::<Vec<_>>();
                 let tensor = tch::Tensor::of_slice(val.to_owned().into_raw_vec().as_slice())
                     .to_device($device)
-                    .view(&dims);
+                    .view(dims);
                 return Ok(Box::new(tensor));
             }
         }
@@ -330,13 +331,13 @@ macro_rules! try_convert_arrayview_to_torch (
         match $value_ref.downcast_ref::<$dtype>() {
             None => {}
             Some(val) => {
-                let dims = val.shape()
+                let dims = &val.shape()
                     .into_iter()
                     .map(|v| *v as i64)
                     .collect::<Vec<_>>();
                 let tensor = tch::Tensor::of_slice(val.to_owned().into_raw_vec().as_slice())
                     .to_device($device)
-                    .view(&dims);
+                    .view(dims);
                 return Ok(Box::new(tensor));
             }
         }
@@ -350,13 +351,13 @@ macro_rules! try_convert_array_vec_to_torch (
             Some(list) => {
                 let tensor_list = list.into_iter()
                     .map(|val| {
-                        let dims = val.shape()
+                        let dims = &val.shape()
                             .into_iter()
                             .map(|v| *v as i64)
                             .collect::<Vec<_>>();
                         let tensor = tch::Tensor::of_slice(&val.to_owned().into_raw_vec().as_slice())
                             .to_device($device)
-                            .view(&dims);
+                            .view(dims);
                         tensor
                     })
                     .collect::<Vec<_>>();
@@ -373,13 +374,13 @@ macro_rules! try_convert_arrayview_vec_to_torch (
             Some(list) => {
                 let tensor_list = list.into_iter()
                     .map(|val| {
-                        let dims = val.shape()
+                        let dims = &val.shape()
                             .into_iter()
                             .map(|v| *v as i64)
                             .collect::<Vec<_>>();
                         let tensor = tch::Tensor::of_slice(&val.to_owned().into_raw_vec().as_slice())
                             .to_device($device)
-                            .view(&dims);
+                            .view(dims);
                         tensor
                     })
                     .collect::<Vec<_>>();
@@ -429,17 +430,11 @@ fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device
     try_convert_vec_vec_to_torch!(value_ref, device, f32);
     try_convert_vec_vec_to_torch!(value_ref, device, f64);
 
-    // try_convert_shaped_vec_to_torch!(value_ref, device, u8);
-    // try_convert_shaped_vec_to_torch!(value_ref, device, i32);
-    // try_convert_shaped_vec_to_torch!(value_ref, device, i64);
-    // try_convert_shaped_vec_to_torch!(value_ref, device, f32);
-    // try_convert_shaped_vec_to_torch!(value_ref, device, f64);
-
-    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, u8);
-    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, i32);
-    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, i64);
-    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, f32);
-    // try_convert_vec_shaped_vec_to_torch!(value_ref, device, f64);
+    try_convert_array_to_torch!(value_ref, device, ArrayD<u8>);
+    try_convert_array_to_torch!(value_ref, device, ArrayD<f32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayD<f64>);
+    try_convert_array_to_torch!(value_ref, device, ArrayD<i32>);
+    try_convert_array_to_torch!(value_ref, device, ArrayD<i64>);
 
     try_convert_array_to_torch!(value_ref, device, Array1<u8>);
     try_convert_array_to_torch!(value_ref, device, Array1<f32>);
@@ -465,6 +460,12 @@ fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device
     try_convert_array_to_torch!(value_ref, device, Array4<i32>);
     try_convert_array_to_torch!(value_ref, device, Array4<i64>);
 
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayD<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayD<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayD<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayD<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, ArrayD<i64>);
+
     try_convert_array_vec_to_torch!(value_ref, device, Array1<u8>);
     try_convert_array_vec_to_torch!(value_ref, device, Array1<f32>);
     try_convert_array_vec_to_torch!(value_ref, device, Array1<f64>);
@@ -489,6 +490,12 @@ fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device
     try_convert_array_vec_to_torch!(value_ref, device, Array4<i32>);
     try_convert_array_vec_to_torch!(value_ref, device, Array4<i64>);
 
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<u8>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<f32>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<f64>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<i32>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<i64>);
+
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView1<u8>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView1<f32>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView1<f64>);
@@ -512,6 +519,12 @@ fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView4<f64>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView4<i32>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView4<i64>);
+
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<u8>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<f32>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<f64>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<i32>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<i64>);
 
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView1<u8>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView1<f32>);
