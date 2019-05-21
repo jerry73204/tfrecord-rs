@@ -7,8 +7,9 @@ use std::mem::transmute;
 use std::panic::catch_unwind;
 use std::fmt::Display;
 use std::collections::{HashMap, HashSet};
-use ndarray::{ArrayD, Array1, Array2, Array3, Array4,
-              ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4};
+use ndarray::{self, ArrayD, Array1, Array2, Array3, Array4,
+              ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
+              Axis};
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
@@ -577,6 +578,160 @@ pub fn example_to_torch_tensor(
             Ok(ret) => ret,
         };
         result.insert(name, ret);
+    }
+
+    Ok(result)
+}
+
+macro_rules! try_make_batch_array (
+    ( $name:ident, $features:ident, $dtype:ty ) => (
+        let correct_guess = match $features[0].downcast_ref::<$dtype>() {
+            None => false,
+            Some(_) => true,
+        };
+
+        if correct_guess {
+            let mut arrays = Vec::new();
+
+            for array_ref in $features.drain(..) {
+                match array_ref.downcast_ref::<$dtype>() {
+                    None => {
+                        let err = ParseError::new(&format!("Cannot make batch on feature with name \"{}\". Heterogeneous type detected.", $name));
+                        return Err(Box::new(err))
+                    },
+                    Some(array) => {
+                        let new_array = array.to_owned().insert_axis(Axis(0));
+                        arrays.push(new_array);
+                    },
+                };
+            }
+
+            let views = arrays.iter()
+                .map(|array| array.view())
+                .collect::<Vec<_>>();
+
+            let result = ndarray::stack(Axis(0), &views).unwrap();
+            return Ok(Box::new(result));
+        }
+    )
+);
+
+macro_rules! try_make_batch_arrayview (
+    ( $name:ident, $features:ident, $dtype:ty ) => (
+        let correct_guess = match $features[0].downcast_ref::<$dtype>() {
+            None => false,
+            Some(_) => true,
+        };
+
+        if correct_guess {
+            let mut arrays = Vec::new();
+
+            for array_ref in $features.drain(..) {
+                match array_ref.downcast_ref::<$dtype>() {
+                    None => {
+                        let err = ParseError::new(&format!("Cannot make batch on feature with name \"{}\". Heterogeneous type detected.", $name));
+                        return Err(Box::new(err))
+                    },
+                    Some(array) => {
+                        let new_array = array.to_owned().insert_axis(Axis(0));
+                        arrays.push(new_array);
+                    },
+                };
+            }
+
+            let views = arrays.iter()
+                .map(|array| array.view())
+                .collect::<Vec<_>>();
+
+            let result = ndarray::stack(Axis(0), &views).unwrap();
+            return Ok(Box::new(result));
+        }
+    )
+);
+
+fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Result<FeatureType, ErrorType> {
+    try_make_batch_array!(name, features, ArrayD<u8>);
+    try_make_batch_array!(name, features, ArrayD<f32>);
+    try_make_batch_array!(name, features, ArrayD<f64>);
+    try_make_batch_array!(name, features, ArrayD<i32>);
+    try_make_batch_array!(name, features, ArrayD<i64>);
+
+    try_make_batch_array!(name, features, Array1<u8>);
+    try_make_batch_array!(name, features, Array1<f32>);
+    try_make_batch_array!(name, features, Array1<f64>);
+    try_make_batch_array!(name, features, Array1<i32>);
+    try_make_batch_array!(name, features, Array1<i64>);
+
+    try_make_batch_array!(name, features, Array2<u8>);
+    try_make_batch_array!(name, features, Array2<f32>);
+    try_make_batch_array!(name, features, Array2<f64>);
+    try_make_batch_array!(name, features, Array2<i32>);
+    try_make_batch_array!(name, features, Array2<i64>);
+
+    try_make_batch_array!(name, features, Array3<u8>);
+    try_make_batch_array!(name, features, Array3<f32>);
+    try_make_batch_array!(name, features, Array3<f64>);
+    try_make_batch_array!(name, features, Array3<i32>);
+    try_make_batch_array!(name, features, Array3<i64>);
+
+    try_make_batch_array!(name, features, Array4<u8>);
+    try_make_batch_array!(name, features, Array4<f32>);
+    try_make_batch_array!(name, features, Array4<f64>);
+    try_make_batch_array!(name, features, Array4<i32>);
+    try_make_batch_array!(name, features, Array4<i64>);
+
+    try_make_batch_arrayview!(name, features, ArrayViewD<u8>);
+    try_make_batch_arrayview!(name, features, ArrayViewD<f32>);
+    try_make_batch_arrayview!(name, features, ArrayViewD<f64>);
+    try_make_batch_arrayview!(name, features, ArrayViewD<i32>);
+    try_make_batch_arrayview!(name, features, ArrayViewD<i64>);
+
+    try_make_batch_arrayview!(name, features, ArrayView1<u8>);
+    try_make_batch_arrayview!(name, features, ArrayView1<f32>);
+    try_make_batch_arrayview!(name, features, ArrayView1<f64>);
+    try_make_batch_arrayview!(name, features, ArrayView1<i32>);
+    try_make_batch_arrayview!(name, features, ArrayView1<i64>);
+
+    try_make_batch_arrayview!(name, features, ArrayView2<u8>);
+    try_make_batch_arrayview!(name, features, ArrayView2<f32>);
+    try_make_batch_arrayview!(name, features, ArrayView2<f64>);
+    try_make_batch_arrayview!(name, features, ArrayView2<i32>);
+    try_make_batch_arrayview!(name, features, ArrayView2<i64>);
+
+    try_make_batch_arrayview!(name, features, ArrayView3<u8>);
+    try_make_batch_arrayview!(name, features, ArrayView3<f32>);
+    try_make_batch_arrayview!(name, features, ArrayView3<f64>);
+    try_make_batch_arrayview!(name, features, ArrayView3<i32>);
+    try_make_batch_arrayview!(name, features, ArrayView3<i64>);
+
+    try_make_batch_arrayview!(name, features, ArrayView4<u8>);
+    try_make_batch_arrayview!(name, features, ArrayView4<f32>);
+    try_make_batch_arrayview!(name, features, ArrayView4<f64>);
+    try_make_batch_arrayview!(name, features, ArrayView4<i32>);
+    try_make_batch_arrayview!(name, features, ArrayView4<i64>);
+
+    let err = ParseError::new(&format!("Cannot make batch on feature with name \"{}\". The type is not supported.", name));
+    Err(Box::new(err))
+}
+
+pub fn make_batch(
+    mut examples: Vec<ExampleType>,
+) -> Result<ExampleType, ErrorType> {
+
+    let names: Vec<_> = examples[0].keys()
+        .map(|key| key.to_owned())
+        .collect();
+    let mut result = ExampleType::new();
+
+    for name in names {
+        let values = examples.iter_mut()
+            .map(|example| example.remove(&name).unwrap())
+            .collect();
+        let batch = match try_make_batch(&name, values) {
+            Ok(ret) => ret,
+            Err(err) => return Err(err),
+        };
+        result.insert(name, batch);
     }
 
     Ok(result)
