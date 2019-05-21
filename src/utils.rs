@@ -201,12 +201,11 @@ fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Arr
         }
     };
 
-    let array = match Array3::from_shape_vec((width, height, channels), image) {
+    let array = match Array3::from_shape_vec((height, width, channels), image) {
         Err(err) => return Err(Box::new(err)),
         Ok(array) => array,
     };
     Ok(array)
-    // Ok((image, vec![height, width, channels]))
 }
 
 fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::Error> {
@@ -317,7 +316,7 @@ macro_rules! try_convert_array_to_torch (
                     .into_iter()
                     .map(|v| *v as i64)
                     .collect::<Vec<_>>();
-                let tensor = tch::Tensor::of_slice(val.view().into_slice().unwrap())
+                let tensor = tch::Tensor::of_slice(val.to_owned().into_raw_vec().as_slice())
                     .to_device($device)
                     .view(&dims);
                 return Ok(Box::new(tensor));
@@ -335,7 +334,7 @@ macro_rules! try_convert_arrayview_to_torch (
                     .into_iter()
                     .map(|v| *v as i64)
                     .collect::<Vec<_>>();
-                let tensor = tch::Tensor::of_slice(val.into_slice().unwrap())
+                let tensor = tch::Tensor::of_slice(val.to_owned().into_raw_vec().as_slice())
                     .to_device($device)
                     .view(&dims);
                 return Ok(Box::new(tensor));
@@ -355,7 +354,7 @@ macro_rules! try_convert_array_vec_to_torch (
                             .into_iter()
                             .map(|v| *v as i64)
                             .collect::<Vec<_>>();
-                        let tensor = tch::Tensor::of_slice(val.view().into_slice().unwrap())
+                        let tensor = tch::Tensor::of_slice(&val.to_owned().into_raw_vec().as_slice())
                             .to_device($device)
                             .view(&dims);
                         tensor
@@ -378,7 +377,7 @@ macro_rules! try_convert_arrayview_vec_to_torch (
                             .into_iter()
                             .map(|v| *v as i64)
                             .collect::<Vec<_>>();
-                        let tensor = tch::Tensor::of_slice(val.into_slice().unwrap())
+                        let tensor = tch::Tensor::of_slice(&val.to_owned().into_raw_vec().as_slice())
                             .to_device($device)
                             .view(&dims);
                         tensor
