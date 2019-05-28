@@ -250,7 +250,7 @@ pub fn decode_image_on_example<S>(
     mut example: ExampleType,
     formats_opt: Option<HashMap<S, Option<ImageFormat>>>,
 ) -> Result<ExampleType, ErrorType> where
-    S: AsRef<str> + Hash + Eq + Display
+    S: AsRef<str> + Hash + Eq + Display + Send
 {
     let mut result = ExampleType::new();
     let entries = match formats_opt {

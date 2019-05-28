@@ -729,7 +729,6 @@ impl Iterator for SeqLoader {
 }
 
 impl Iterator for IndexIter {
-
     type Item = RecordIndex;
 
     fn next(&mut self) -> Option<Self::Item> {

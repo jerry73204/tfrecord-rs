@@ -44,8 +44,8 @@ pub trait DsIterator: Iterator + Sized {
     }
 
     fn prefetch(mut self, buf_size: usize) -> Prefetch<Self> where
-        Self: 'static + Sync + Send,
-        Self::Item: 'static + Sync + Send, {
+        Self: 'static + Send,
+        Self::Item: 'static + Send, {
 
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
@@ -140,7 +140,7 @@ impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
 
 impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
     I: Iterator<Item=Result<V, E>>,
-    E: Debug + Sync + Send, {
+    E: Debug + Send, {
 
     type Item = V;
 
@@ -201,8 +201,8 @@ impl<I, R> Iterator for Shuffle<I, R> where
 }
 
 impl<I> Iterator for Prefetch<I> where
-    I: Iterator + Sync + Send,
-    I::Item: Sync + Send {
+    I: Iterator + Send,
+    I::Item: Send {
 
     type Item = I::Item;
 
