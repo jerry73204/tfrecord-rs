@@ -20,7 +20,7 @@ use image::tiff::TIFFDecoder;
 use image::tga::TGADecoder;
 use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
-use crate::{ExampleType, FeatureType, ErrorType, NonSyncExampleType};
+use crate::{ExampleType, FeatureType, ErrorType};
 use crate::parser;
 use crate::error::ParseError;
 
@@ -416,7 +416,7 @@ macro_rules! try_convert_vec_vec_to_torch (
     )
 );
 
-fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device) -> Result<Box<dyn Any>, ErrorType> {
+fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device) -> Result<Box<dyn Any + Send>, ErrorType> {
 
     // TODO: optimize type matching
     try_convert_vec_to_torch!(value_ref, device, u8);
@@ -560,14 +560,14 @@ pub fn example_to_torch_tensor(
     example: ExampleType,
     names_opt: Option<HashSet<&str>>,
     device: tch::Device,
-) -> Result<NonSyncExampleType, ErrorType>
+) -> Result<ExampleType, ErrorType>
 {
     let (mut remaining_example, entries) = match filter_entries(example, names_opt) {
         Ok(ret) => ret,
         Err(err) => return Err(Box::new(err)),
     };
 
-    let mut result = HashMap::<String, Box<dyn Any>>::new();
+    let mut result = ExampleType::new();
     for (name, val) in remaining_example.drain() {
         result.insert(name, val);
     }
