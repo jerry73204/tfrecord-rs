@@ -1,3 +1,5 @@
+cargo-features = ["profile-overrides"]
+
 [package]
 name = "tfrecord-rs"
 version = "0.1.0"
@@ -10,7 +12,8 @@ crc = "^1.8"
 byteorder = "^1"
 memmap = "^0.6"
 tensorflow = "^0.13"
-tch = "^0.0"
+# tch = "^0.0"
+tch = { git = "https://github.com/jerry73204/tch-rs.git", branch = "copy-varstore" }
 glob = "^0.3"
 rayon = "^1.0"
 lru = "^0.1"
@@ -24,3 +27,6 @@ log = "^0.4"
 [dev-dependencies]
 maplit = "^1.0"
 libflate = "^0.1"
+
+[profile.dev.overrides."*"]
+opt-level = 2
