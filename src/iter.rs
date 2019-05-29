@@ -50,17 +50,22 @@ pub trait DsIterator: Iterator + Sized {
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
         let worker = thread::spawn(move || {
-            debug!("Producer thread started for prefetch()");
+            debug!("Prefetch producer started");
             loop {
-                debug!("{} elements buffered in prefetch queue (sender)", sender.len());
+                debug!("{} elements in prefetch buffer reported by sender", sender.len());
                 match self.next() {
                     None => {
-                        sender.send(None).unwrap();
-                        debug!("Producer thread ended for prefetch()");
+                        if let Err(err) = sender.send(None) {
+                            warn!("Prefetch producer error: {}", err);
+                        }
+                        debug!("Prefetch producer finished");
                         return;
                     }
                     Some(val) => {
-                        sender.send(Some(val)).unwrap();
+                        if let Err(err) = sender.send(Some(val)) {
+                            warn!("Prefetch producer error: {}", err);
+                            return;
+                        }
                     }
                 }
             }
@@ -211,10 +216,10 @@ impl<I> Iterator for Prefetch<I> where
             return None;
         }
 
-        debug!("{} elements buffered in prefetch queue (consumer)", self.receiver.len());
+        debug!("{} elements in prefetch buffer reported by consumer", self.receiver.len());
         match self.receiver.recv().unwrap() {
             None => {
-                debug!("Reach end of stream and stop prefetching");
+                debug!("Prefetch consumer finished");
                 self.worker_opt.take().unwrap().join().unwrap();
                 None
             }
