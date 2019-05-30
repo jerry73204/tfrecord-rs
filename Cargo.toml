@@ -27,6 +27,7 @@ log = "^0.4"
 [dev-dependencies]
 maplit = "^1.0"
 libflate = "^0.1"
+par-map = "^0.1"
 
-[profile.dev.overrides."*"]
-opt-level = 2
+# [profile.dev.overrides."*"]
+# opt-level = 2

@@ -290,7 +290,6 @@ impl Default for LoaderOptions {
 
 
 impl IndexedLoader {
-
     pub fn index_iter(&self) -> IndexIter {
 
         IndexIter {
@@ -300,7 +299,6 @@ impl IndexedLoader {
     }
 
     pub fn into_record_iter(self) -> IndexRecordIter {
-
         IndexRecordIter {
             cursor: 0,
             loader_rc: Arc::new(self),
@@ -308,7 +306,6 @@ impl IndexedLoader {
     }
 
     pub fn get_indexes(&self) -> &[RecordIndex] {
-
         &self.indexes
     }
 

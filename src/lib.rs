@@ -24,7 +24,3 @@ use std::fmt::Debug;
 pub type FeatureType = Box<dyn Any + Send>;
 pub type ErrorType = Box<dyn Debug + Send>;
 pub type ExampleType = HashMap<String, FeatureType>;
-
-// pub type NonSyncFeatureType = Box<dyn Any>;
-// pub type NonSyncErrorType = Box<dyn Debug>;
-// pub type NonSyncExampleType = HashMap<String, NonSyncFeatureType>;

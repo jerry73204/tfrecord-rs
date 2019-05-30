@@ -1,5 +1,6 @@
 #[macro_use] extern crate maplit;
 extern crate libflate;
+extern crate par_map;
 
 use std::path::Path;
 use std::error::Error;
@@ -24,7 +25,7 @@ fn parse_example_test() -> Result<(), Box<dyn Error>>
 
     let loader = SeqLoader::load(out_path)?;
     let record_cnt = loader
-        .to_tf_example(None)
+        .map(|record| bytes_to_example(&record, None))
         .unwrap_ok()
         .fold(0, |mut cnt, val| {
             let mut keys: Vec<_> = val.keys().into_iter().collect();
@@ -50,13 +51,13 @@ fn decode_image_test() -> Result<(), Box<dyn Error>>
 
     let loader = SeqLoader::load(path)?;
     let record_cnt = loader
-        .to_tf_example(Some(hashset!("frames")))
+        .map(|record| bytes_to_example(&record, None))
         .unwrap_result()
-        .decode_image(Some(hashmap!("frames" => None)))
+        .map(|example| decode_image_on_example(example, Some(hashmap!("frames" => None))))
         .unwrap_result()
         .fold(0, |mut cnt, example| {
             let keys: Vec<_> = example.keys().into_iter().collect();
-            assert!(keys.len() == 1);
+            assert!(keys.len() == 2);
             example["frames"].downcast_ref::<Vec<Array3<u8>>>().unwrap();
 
             cnt += 1;
@@ -75,13 +76,13 @@ fn parallel_decode_image_test() -> Result<(), Box<dyn Error>>
 
     let loader = SeqLoader::load(path)?;
     let record_cnt = loader
-        .to_tf_example(Some(hashset!("frames")))
+        .map(|record| bytes_to_example(&record, None))
         .unwrap_result()
-        .par_decode_image(Some(hashmap!("frames" => None)), 4096)
+        .par_map(|example| decode_image_on_example(example, Some(hashmap!("frames" => None))))
         .unwrap_result()
         .fold(0, |mut cnt, example| {
             let keys: Vec<_> = example.keys().into_iter().collect();
-            assert!(keys.len() == 1);
+            assert!(keys.len() == 2);
             example["frames"].downcast_ref::<Vec<Array3<u8>>>().unwrap();
 
             cnt += 1;
@@ -98,11 +99,11 @@ fn torch_tensor_test() -> Result<(), Box<dyn Error>>
     let path = Path::new("./test_files/rooms_free_camera_with_object_rotations.tfrecords");
     let loader = SeqLoader::load(path)?;
     let record_cnt = loader
-        .to_tf_example(None)
+        .map(|record| bytes_to_example(&record, None))
         .unwrap_result()
-        .decode_image(Some(hashmap!("frames" => None)))
+        .map(|example| decode_image_on_example(example, Some(hashmap!("frames" => None))))
         .unwrap_result()
-        .to_torch_tensor(None)
+        .map(|example| example_to_torch_tensor(example, None, tch::Device::Cpu))
         .unwrap_result()
         .fold(0, |mut cnt, example| {
             let mut keys: Vec<_> = example.keys().into_iter().collect();
