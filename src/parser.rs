@@ -1,6 +1,9 @@
 use std::io;
 use std::collections::HashMap;
 use crate::from_tf::example;
+use crate::from_tf::event::{self, Event_oneof_what, LogMessage, LogMessage_Level,
+                            SessionLog, SessionLog_SessionStatus, TaggedRunMetadata};
+use crate::from_tf::summary::{Summary, Summary_Value};
 use crate::from_tf::feature::Feature_oneof_kind;
 use crate::error::make_corrupted_error;
 
@@ -121,4 +124,60 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, io::E
     }
 
     Ok((context_result, feature_result))
+}
+
+pub fn parse_event(payload: &[u8]) -> Result<(), io::Error> {
+    let event: event::Event = protobuf::parse_from_bytes(payload)?;
+
+    println!("###");
+    println!("- wall_time: {:?}\tstep: {:?}", event.wall_time, event.step);
+
+    match event.what {
+        None => {
+            println!("- none");
+        },
+        Some(Event_oneof_what::file_version(version)) => {
+            println!("- file_version");
+            println!("- version: {:?}", version);
+        }
+        Some(Event_oneof_what::graph_def(bytes)) => {
+            println!("- graph_def");
+        }
+        Some(Event_oneof_what::summary(summary)) => {
+            println!("- summary");
+
+            for val in summary.value.iter() {
+                println!("  - name: {:?}\ttag: {:?}", val.node_name, val.tag);
+                match val.metadata.as_ref() {
+                    Some(meta) => {
+                        println!("    - meta_name: {:?}\tmeta_desc: {:?}", meta.display_name, meta.summary_description);
+                        match meta.plugin_data.as_ref() {
+                            Some(data) => {
+                                println!("      - plugin_name: {:?}, data_len: {:?}", data.plugin_name, data.content.len());
+                            }
+                            None => {}
+                        }
+                    }
+                    None => {},
+                }
+            }
+        }
+        Some(Event_oneof_what::log_message(log)) => {
+            println!("- log_message");
+            println!("- level: {:?}\tmessage: {:?}", log.level, log.message);
+        }
+        Some(Event_oneof_what::session_log(log)) => {
+            println!("- session_log");
+            println!("- status: {:?}\tcheckpoint_path: {:?}\tmsg: {:?}", log.status, log.checkpoint_path, log.msg);
+        }
+        Some(Event_oneof_what::tagged_run_metadata(meta)) => {
+            println!("- tagged_run_metadata");
+            println!("- tag: {:?}\trun_metadata: {:?}", meta.tag, meta.run_metadata);
+        }
+        Some(Event_oneof_what::meta_graph_def(bytes)) => {
+            println!("- meta_graph_def");
+        }
+    }
+
+    Ok(())
 }

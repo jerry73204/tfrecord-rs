@@ -8,8 +8,10 @@ use std::io::{self, BufReader, BufWriter};
 use std::fs::{self, File};
 use libflate::zlib;
 use ndarray::Array3;
+use par_map::ParMap;
 use tfrecord_rs::loader::{LoaderOptions, LoaderMethod, IndexedLoader, Loader, SeqLoader};
 use tfrecord_rs::iter::DsIterator;
+use tfrecord_rs::utils::{bytes_to_example, decode_image_on_example, example_to_torch_tensor};
 
 #[test]
 fn parse_example_test() -> Result<(), Box<dyn Error>>
@@ -117,5 +119,23 @@ fn torch_tensor_test() -> Result<(), Box<dyn Error>>
             cnt
         });
     assert!(record_cnt == 100);
+    Ok(())
+}
+
+#[test]
+fn parse_event_test() -> Result<(), Box<dyn Error>>
+{
+    // Prepare file
+    let path = Path::new("/path/to/file.tfevents.*");
+    let loader = SeqLoader::load(path)?;
+    let record_cnt = loader
+        .map(|record| tfrecord_rs::parser::parse_event(&record))
+        .unwrap_result()
+        .fold(0, |mut cnt, event| {
+            cnt += 1;
+            cnt
+        });
+
+    dbg!(record_cnt);
     Ok(())
 }
