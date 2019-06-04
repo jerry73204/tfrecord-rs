@@ -1,5 +1,3 @@
-cargo-features = ["profile-overrides"]
-
 [package]
 name = "tfrecord-rs"
 version = "0.1.0"
@@ -28,6 +26,3 @@ log = "^0.4"
 maplit = "^1.0"
 libflate = "^0.1"
 par-map = "^0.1"
-
-# [profile.dev.overrides."*"]
-# opt-level = 2
