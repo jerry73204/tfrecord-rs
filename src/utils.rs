@@ -1,5 +1,4 @@
 use std::io::Cursor;
-use std::any::Any;
 use std::borrow::Borrow;
 use std::cmp::Eq;
 use std::hash::Hash;
