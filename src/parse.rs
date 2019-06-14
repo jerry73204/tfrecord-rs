@@ -1,11 +1,18 @@
-use std::io;
 use std::collections::HashMap;
+use failure::Fallible;
 use crate::from_tf::example;
-use crate::from_tf::event::{self, Event_oneof_what, LogMessage, LogMessage_Level,
-                            SessionLog, SessionLog_SessionStatus, TaggedRunMetadata};
-use crate::from_tf::summary::{Summary, Summary_Value};
+use crate::from_tf::event::{
+    self,
+    Event_oneof_what,
+//     LogMessage,
+//     LogMessage_Level,
+//     SessionLog,
+//     SessionLog_SessionStatus,
+//     TaggedRunMetadata,
+};
+// use crate::from_tf::summary::{Summary, Summary_Value};
 use crate::from_tf::feature::Feature_oneof_kind;
-use crate::error::make_corrupted_error;
+use crate::error::CorruptedRecordError;
 
 pub type Example = HashMap<String, FeatureList>;
 pub type SeqExample = (HashMap<String, FeatureList>, HashMap<String, FeatureSeqList>);
@@ -22,7 +29,7 @@ pub enum FeatureSeqList {
     I64(Vec<Vec<i64>>),
 }
 
-pub fn parse_single_example(payload: &[u8]) -> Result<Example, io::Error> {
+pub fn parse_single_example(payload: &[u8]) -> Fallible<Example> {
     let mut example: example::Example = protobuf::parse_from_bytes(payload)?;
     let features = example.take_features().take_feature();
     let mut result = HashMap::<String, FeatureList>::new();
@@ -45,7 +52,7 @@ pub fn parse_single_example(payload: &[u8]) -> Result<Example, io::Error> {
     Ok(result)
 }
 
-pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, io::Error> {
+pub fn parse_single_sequence_example(payload: &[u8]) -> Fallible<SeqExample> {
     let mut seq_example: example::SequenceExample = protobuf::parse_from_bytes(payload)?;
     let context = seq_example.take_context().take_feature();
     let feature_list = seq_example.take_feature_lists().take_feature_list();
@@ -97,7 +104,7 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, io::E
                         vals.push(val.take_value().into_vec());
                     }
                     else {
-                        return Err(make_corrupted_error());
+                        return Err(CorruptedRecordError.into());
                     }
                 }
                 Some(Feature_oneof_kind::float_list(mut val)) => {
@@ -105,7 +112,7 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, io::E
                         vals.push(val.take_value());
                     }
                     else {
-                        return Err(make_corrupted_error());
+                        return Err(CorruptedRecordError.into());
                     }
                 }
                 Some(Feature_oneof_kind::int64_list(mut val)) => {
@@ -113,7 +120,7 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, io::E
                         vals.push(val.take_value());
                     }
                     else {
-                        return Err(make_corrupted_error());
+                        return Err(CorruptedRecordError.into());
                     }
                 }
                 None => (),
@@ -126,7 +133,7 @@ pub fn parse_single_sequence_example(payload: &[u8]) -> Result<SeqExample, io::E
     Ok((context_result, feature_result))
 }
 
-pub fn parse_event(payload: &[u8]) -> Result<(), io::Error> {
+pub fn parse_event(payload: &[u8]) -> Fallible<()> {
     let event: event::Event = protobuf::parse_from_bytes(payload)?;
 
     println!("###");

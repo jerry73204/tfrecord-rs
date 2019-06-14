@@ -1,62 +1,40 @@
-use std::{io, fmt, error};
+use failure::Fail;
 
-// fn
-
-pub fn make_checksum_error(expect_cksum: u32, true_cksum: u32) -> io::Error
-{
-    io::Error::new(io::ErrorKind::Other, format!("Checksum mismatch: expect checksum {}, but get {}", expect_cksum, true_cksum))
+#[derive(Debug, Fail)]
+#[fail(display = "Parse error: {}", desc)]
+pub struct ParseError {
+    pub desc: String
 }
 
-pub fn make_truncated_error() -> io::Error
-{
-    io::Error::new(io::ErrorKind::UnexpectedEof, "Truncated record")
+#[derive(Debug, Fail)]
+#[fail(display = "Item named \"{}\" not found", name)]
+pub struct ItemNotFoundError {
+    pub name: String
 }
 
-pub fn make_corrupted_error() -> io::Error
-{
-    io::Error::new(io::ErrorKind::InvalidData, format!("Invalid record data"))
+#[derive(Debug, Fail)]
+#[fail(display = "Unsupported image format")]
+pub struct UnsuportedImageFormatError;
+
+#[derive(Debug, Fail)]
+#[fail(display = "Unsupported value type")]
+pub struct UnsuportedValueTypeError;
+
+#[derive(Debug, Fail)]
+#[fail(display = "Value type is inconsistent")]
+pub struct InconsistentValueTypeError;
+
+#[derive(Debug, Fail)]
+#[fail(display = "Checksum mismatched, expect {} but found {}", expect, found)]
+pub struct ChecksumMismatchError {
+    pub expect: String,
+    pub found: String,
 }
 
-pub fn make_load_index_error() -> io::Error
-{
-    io::Error::new(io::ErrorKind::Other, format!("Failed to load record data. Is the record index corrupted or the file is unreadable?"))
-}
+#[derive(Debug, Fail)]
+#[fail(display = "Invalid record index")]
+pub struct InvalidRecordIndexError;
 
-pub fn make_loader_error(path_str: &str) -> io::Error
-{
-    io::Error::new(io::ErrorKind::Other, format!("{} is not a file or directory", path_str))
-}
-
-// struct
-
-#[derive(Debug, Clone)]
-pub struct ParseError
-{
-    desc: String,
-}
-
-// impl
-
-impl ParseError
-{
-    pub fn new(desc: &str) -> ParseError
-    {
-        ParseError {
-            desc: format!("Parsing error: {}", desc)
-        }
-    }
-}
-
-impl error::Error for ParseError
-{
-    fn description(&self) -> &str {
-        &self.desc
-    }
-}
-
-impl fmt::Display for ParseError
-{
-    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        write!(formatter, "{}", self.desc)
-    }
-}
+#[derive(Debug, Fail)]
+#[fail(display = "Corrupted record")]
+pub struct CorruptedRecordError;
