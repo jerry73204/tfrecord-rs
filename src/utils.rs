@@ -2,13 +2,19 @@ use std::io::Cursor;
 use std::borrow::Borrow;
 use std::cmp::Eq;
 use std::hash::Hash;
+use std::any::{Any, TypeId};
 use std::mem::transmute;
 use std::panic::catch_unwind;
 use std::fmt::Display;
 use std::collections::{HashMap, HashSet};
-use ndarray::{self, ArrayD, Array1, Array2, Array3, Array4,
-              ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
-              Axis};
+use std::collections::hash_map::Entry;
+use std::sync::{Mutex, Arc, Once};
+use ndarray::{
+    self,
+    ArrayD, Array1, Array2, Array3, Array4,
+    ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
+    Axis,
+};
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
@@ -28,6 +34,218 @@ use crate::error::{
     UnsuportedValueTypeError,
     InconsistentValueTypeError,
 };
+use crate::convert::ToTorchTensor;
+
+// type ToTorchCallback = Box<dyn Fn(FeatureType, tch::Device) -> FeatureType>;
+
+// macro_rules! add_array_to_torch_map (
+//     ( $map:ident, $dtype:ty ) => (
+//         let type_id = TypeId::of::<$dtype>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<$dtype>().unwrap();
+//                 let mid: ToTorchTensor<&$dtype> = value.into();
+//                 let tensor: tch::Tensor = mid.into();
+//                 let tensor = tensor.to_device(device);
+//                 let result: FeatureType = Box::new(tensor);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// macro_rules! add_vec_array_to_torch_map (
+//     ( $map:ident, $dtype:ty ) => (
+//         let type_id = TypeId::of::<Vec<$dtype>>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<Vec<$dtype>>().unwrap();
+//                 let mid: ToTorchTensor<&Vec<$dtype>> = value.into();
+//                 let tensors: Vec<tch::Tensor> = mid.into();
+//                 let tensors: Vec<tch::Tensor> = tensors
+//                     .into_iter()
+//                     .map(|tensor| tensor.to_device(device))
+//                     .collect();
+//                 let result: FeatureType = Box::new(tensors);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// macro_rules! add_arrayview_to_torch_map (
+//     ( $map:ident, $owned_type:ty, $view_type:ty ) => (
+//         let type_id = TypeId::of::<$view_type>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<$view_type>().unwrap();
+//                 let mid: ToTorchTensor<$owned_type> = value.to_owned().into();
+//                 let tensor: tch::Tensor = mid.into();
+//                 let tensor = tensor.to_device(device);
+//                 let result: FeatureType = Box::new(tensor);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// macro_rules! add_vec_arrayview_to_torch_map (
+//     ( $map:ident, $owned_type:ty, $view_type:ty ) => (
+//         let type_id = TypeId::of::<Vec<$view_type>>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<Vec<$view_type>>().unwrap();
+//                 let mid: ToTorchTensor<Vec<$owned_type>> = value.into_iter()
+//                     .map(|array| array.to_owned())
+//                     .collect::<Vec<$owned_type>>()
+//                     .into();
+//                 let tensors: Vec<tch::Tensor> = mid.into();
+//                 let tensors: Vec<tch::Tensor> = tensors.into_iter()
+//                     .map(|tensor| tensor.to_device(device))
+//                     .collect();
+//                 let result: FeatureType = Box::new(tensors);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// thread_local! {
+//     static INIT_TO_TORCH_MAP: Once = Once::new();
+//     static TO_TORCH_MAP: HashMap<TypeId, ToTorchCallback> = {
+//         let mut map = HashMap::new();
+
+//         add_array_to_torch_map!(map, ArrayD<u8>);
+//         add_array_to_torch_map!(map, ArrayD<f32>);
+//         add_array_to_torch_map!(map, ArrayD<f64>);
+//         add_array_to_torch_map!(map, ArrayD<i32>);
+//         add_array_to_torch_map!(map, ArrayD<i64>);
+
+//         add_array_to_torch_map!(map, Array1<u8>);
+//         add_array_to_torch_map!(map, Array1<f32>);
+//         add_array_to_torch_map!(map, Array1<f64>);
+//         add_array_to_torch_map!(map, Array1<i32>);
+//         add_array_to_torch_map!(map, Array1<i64>);
+
+//         add_array_to_torch_map!(map, Array2<u8>);
+//         add_array_to_torch_map!(map, Array2<f32>);
+//         add_array_to_torch_map!(map, Array2<f64>);
+//         add_array_to_torch_map!(map, Array2<i32>);
+//         add_array_to_torch_map!(map, Array2<i64>);
+
+//         add_array_to_torch_map!(map, Array3<u8>);
+//         add_array_to_torch_map!(map, Array3<f32>);
+//         add_array_to_torch_map!(map, Array3<f64>);
+//         add_array_to_torch_map!(map, Array3<i32>);
+//         add_array_to_torch_map!(map, Array3<i64>);
+
+//         add_array_to_torch_map!(map, Array4<u8>);
+//         add_array_to_torch_map!(map, Array4<f32>);
+//         add_array_to_torch_map!(map, Array4<f64>);
+//         add_array_to_torch_map!(map, Array4<i32>);
+//         add_array_to_torch_map!(map, Array4<i64>);
+
+//         add_vec_array_to_torch_map!(map, ArrayD<u8>);
+//         add_vec_array_to_torch_map!(map, ArrayD<f32>);
+//         add_vec_array_to_torch_map!(map, ArrayD<f64>);
+//         add_vec_array_to_torch_map!(map, ArrayD<i32>);
+//         add_vec_array_to_torch_map!(map, ArrayD<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array1<u8>);
+//         add_vec_array_to_torch_map!(map, Array1<f32>);
+//         add_vec_array_to_torch_map!(map, Array1<f64>);
+//         add_vec_array_to_torch_map!(map, Array1<i32>);
+//         add_vec_array_to_torch_map!(map, Array1<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array2<u8>);
+//         add_vec_array_to_torch_map!(map, Array2<f32>);
+//         add_vec_array_to_torch_map!(map, Array2<f64>);
+//         add_vec_array_to_torch_map!(map, Array2<i32>);
+//         add_vec_array_to_torch_map!(map, Array2<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array3<u8>);
+//         add_vec_array_to_torch_map!(map, Array3<f32>);
+//         add_vec_array_to_torch_map!(map, Array3<f64>);
+//         add_vec_array_to_torch_map!(map, Array3<i32>);
+//         add_vec_array_to_torch_map!(map, Array3<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array4<u8>);
+//         add_vec_array_to_torch_map!(map, Array4<f32>);
+//         add_vec_array_to_torch_map!(map, Array4<f64>);
+//         add_vec_array_to_torch_map!(map, Array4<i32>);
+//         add_vec_array_to_torch_map!(map, Array4<i64>);
+
+//         add_arrayview_to_torch_map!(map, ArrayD<u8>, ArrayViewD<u8>);
+//         add_arrayview_to_torch_map!(map, ArrayD<f32>, ArrayViewD<f32>);
+//         add_arrayview_to_torch_map!(map, ArrayD<f64>, ArrayViewD<f64>);
+//         add_arrayview_to_torch_map!(map, ArrayD<i32>, ArrayViewD<i32>);
+//         add_arrayview_to_torch_map!(map, ArrayD<i64>, ArrayViewD<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array1<u8>, ArrayView1<u8>);
+//         add_arrayview_to_torch_map!(map, Array1<f32>, ArrayView1<f32>);
+//         add_arrayview_to_torch_map!(map, Array1<f64>, ArrayView1<f64>);
+//         add_arrayview_to_torch_map!(map, Array1<i32>, ArrayView1<i32>);
+//         add_arrayview_to_torch_map!(map, Array1<i64>, ArrayView1<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array2<u8>, ArrayView2<u8>);
+//         add_arrayview_to_torch_map!(map, Array2<f32>, ArrayView2<f32>);
+//         add_arrayview_to_torch_map!(map, Array2<f64>, ArrayView2<f64>);
+//         add_arrayview_to_torch_map!(map, Array2<i32>, ArrayView2<i32>);
+//         add_arrayview_to_torch_map!(map, Array2<i64>, ArrayView2<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array3<u8>, ArrayView3<u8>);
+//         add_arrayview_to_torch_map!(map, Array3<f32>, ArrayView3<f32>);
+//         add_arrayview_to_torch_map!(map, Array3<f64>, ArrayView3<f64>);
+//         add_arrayview_to_torch_map!(map, Array3<i32>, ArrayView3<i32>);
+//         add_arrayview_to_torch_map!(map, Array3<i64>, ArrayView3<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array4<u8>, ArrayView4<u8>);
+//         add_arrayview_to_torch_map!(map, Array4<f32>, ArrayView4<f32>);
+//         add_arrayview_to_torch_map!(map, Array4<f64>, ArrayView4<f64>);
+//         add_arrayview_to_torch_map!(map, Array4<i32>, ArrayView4<i32>);
+//         add_arrayview_to_torch_map!(map, Array4<i64>, ArrayView4<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<u8>, ArrayViewD<u8>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<f32>, ArrayViewD<f32>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<f64>, ArrayViewD<f64>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<i32>, ArrayViewD<i32>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<i64>, ArrayViewD<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array1<u8>, ArrayView1<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<f32>, ArrayView1<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<f64>, ArrayView1<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<i32>, ArrayView1<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<i64>, ArrayView1<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array2<u8>, ArrayView2<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<f32>, ArrayView2<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<f64>, ArrayView2<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<i32>, ArrayView2<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<i64>, ArrayView2<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array3<u8>, ArrayView3<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<f32>, ArrayView3<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<f64>, ArrayView3<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<i32>, ArrayView3<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<i64>, ArrayView3<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array4<u8>, ArrayView4<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<f32>, ArrayView4<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<f64>, ArrayView4<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<i32>, ArrayView4<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<i64>, ArrayView4<i64>);
+
+//         map
+//     };
+// }
 
 pub fn bytes_to_example<'a>(
     buf: &[u8],
@@ -350,8 +568,18 @@ fn try_convert_to_tensor(
     device: tch::Device
 ) -> Fallible<FeatureType>
 {
+    // TO_TORCH_MAP.with(|map| {
+    //     let type_id = value_ref.type_id();
+    //     dbg!(map.keys());
+    //     if map.contains_key(&type_id) {
+    //         let result = map[&type_id](value_ref, device);
+    //         Ok(result)
+    //     }
+    //     else {
+    //         Err(UnsuportedValueTypeError.into())
+    //     }
+    // })
 
-    // TODO: optimize type matching
     try_convert_vec_to_torch!(value_ref, device, u8);
     try_convert_vec_to_torch!(value_ref, device, i32);
     try_convert_vec_to_torch!(value_ref, device, i64);

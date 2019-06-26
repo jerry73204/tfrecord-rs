@@ -17,6 +17,7 @@ pub mod iter;
 pub mod parse;
 pub mod error;
 pub mod utils;
+pub mod convert;
 
 use std::any::Any;
 use std::collections::HashMap;
