@@ -11,8 +11,8 @@ use std::collections::hash_map::Entry;
 use std::sync::{Mutex, Arc, Once};
 use ndarray::{
     self, Array,
-    ArrayD, Array1, Array2, Array3, Array4,
-    ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
+    ArrayD, Array1, Array2, Array3, Array4, Array5,
+    ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4, ArrayView5,
     Axis,
 };
 use tch;
@@ -651,6 +651,12 @@ fn try_convert_to_tensor(
     try_convert_array_to_torch!(value_ref, device, Array4<i32>);
     try_convert_array_to_torch!(value_ref, device, Array4<i64>);
 
+    try_convert_array_to_torch!(value_ref, device, Array5<u8>);
+    try_convert_array_to_torch!(value_ref, device, Array5<f32>);
+    try_convert_array_to_torch!(value_ref, device, Array5<f64>);
+    try_convert_array_to_torch!(value_ref, device, Array5<i32>);
+    try_convert_array_to_torch!(value_ref, device, Array5<i64>);
+
     try_convert_array_vec_to_torch!(value_ref, device, ArrayD<u8>);
     try_convert_array_vec_to_torch!(value_ref, device, ArrayD<f32>);
     try_convert_array_vec_to_torch!(value_ref, device, ArrayD<f64>);
@@ -680,6 +686,12 @@ fn try_convert_to_tensor(
     try_convert_array_vec_to_torch!(value_ref, device, Array4<f64>);
     try_convert_array_vec_to_torch!(value_ref, device, Array4<i32>);
     try_convert_array_vec_to_torch!(value_ref, device, Array4<i64>);
+
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<i64>);
 
     try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<u8>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<f32>);
@@ -711,6 +723,12 @@ fn try_convert_to_tensor(
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView4<i32>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView4<i64>);
 
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<u8>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<f32>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<f64>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<i32>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<i64>);
+
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<u8>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<f32>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<f64>);
@@ -740,6 +758,12 @@ fn try_convert_to_tensor(
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<f64>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i32>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i64>);
+
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<u8>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<f32>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<f64>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<i32>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<i64>);
 
     let err = UnsuportedValueTypeError {
         key_name: name.to_owned(),
@@ -968,6 +992,12 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
     try_make_batch_array!(name, features, Array4<i32>);
     try_make_batch_array!(name, features, Array4<i64>);
 
+    try_make_batch_array!(name, features, Array5<u8>);
+    try_make_batch_array!(name, features, Array5<f32>);
+    try_make_batch_array!(name, features, Array5<f64>);
+    try_make_batch_array!(name, features, Array5<i32>);
+    try_make_batch_array!(name, features, Array5<i64>);
+
     try_make_batch_arrayview!(name, features, ArrayViewD<u8>);
     try_make_batch_arrayview!(name, features, ArrayViewD<f32>);
     try_make_batch_arrayview!(name, features, ArrayViewD<f64>);
@@ -997,6 +1027,12 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
     try_make_batch_arrayview!(name, features, ArrayView4<f64>);
     try_make_batch_arrayview!(name, features, ArrayView4<i32>);
     try_make_batch_arrayview!(name, features, ArrayView4<i64>);
+
+    try_make_batch_arrayview!(name, features, ArrayView5<u8>);
+    try_make_batch_arrayview!(name, features, ArrayView5<f32>);
+    try_make_batch_arrayview!(name, features, ArrayView5<f64>);
+    try_make_batch_arrayview!(name, features, ArrayView5<i32>);
+    try_make_batch_arrayview!(name, features, ArrayView5<i64>);
 
     let err = UnsuportedValueTypeError {
         key_name: name.to_owned(),
