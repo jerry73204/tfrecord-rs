@@ -537,6 +537,18 @@ macro_rules! try_convert_arrayview_vec_to_torch (
     )
 );
 
+macro_rules! try_convert_scalar_to_torch (
+    ( $value_ref:ident, $device:ident, $dtype:ty ) => (
+        match $value_ref.downcast_ref::<$dtype>() {
+            None => {}
+            Some(val) => {
+                let tensor: tch::Tensor = (*val).into();
+                return Ok(Box::new(tensor.to_device($device)));
+            }
+        }
+    )
+);
+
 macro_rules! try_convert_vec_to_torch (
     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
         match $value_ref.downcast_ref::<Vec<$dtype>>() {
@@ -579,6 +591,20 @@ fn try_convert_to_tensor(
     //         Err(UnsuportedValueTypeError.into())
     //     }
     // })
+
+    match value_ref.downcast_ref::<tch::Tensor>() {
+        None => {}
+        Some(val) => {
+            let tensor = val.shallow_clone();
+            return Ok(Box::new(tensor.to_device(device)));
+        }
+    }
+
+    try_convert_scalar_to_torch!(value_ref, device, u8);
+    try_convert_scalar_to_torch!(value_ref, device, i32);
+    try_convert_scalar_to_torch!(value_ref, device, i64);
+    try_convert_scalar_to_torch!(value_ref, device, f32);
+    try_convert_scalar_to_torch!(value_ref, device, f64);
 
     try_convert_vec_to_torch!(value_ref, device, u8);
     try_convert_vec_to_torch!(value_ref, device, i32);
@@ -801,6 +827,24 @@ macro_rules! try_make_batch_arrayview (
 );
 
 fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<FeatureType> {
+    if features[0].downcast_ref::<tch::Tensor>().is_some() {
+        let mut tensors = vec![];
+
+        for tensor_ref in features.into_iter() {
+            match tensor_ref.downcast_ref::<tch::Tensor>() {
+                None => {
+                    return Err(InconsistentValueTypeError.into());
+                },
+                Some(tensor) => {
+                    tensors.push(tensor.shallow_clone());
+                },
+            };
+        }
+
+        let batch = tch::Tensor::stack(&tensors, 0);
+        return Ok(Box::new(batch));
+    }
+
     try_make_batch_array!(name, features, ArrayD<u8>);
     try_make_batch_array!(name, features, ArrayD<f32>);
     try_make_batch_array!(name, features, ArrayD<f64>);
