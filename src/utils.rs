@@ -768,6 +768,35 @@ pub fn example_to_torch_tensor(
     Ok(result)
 }
 
+macro_rules! try_make_batch_scalar (
+    ( $name:ident, $features:ident, $dtype:ty ) => (
+        let correct_guess = match $features[0].downcast_ref::<$dtype>() {
+            None => false,
+            Some(_) => true,
+        };
+
+        if correct_guess {
+            let mut scalars = vec![];
+
+            for scalar_ref in $features.drain(..) {
+                match scalar_ref.downcast_ref::<$dtype>() {
+                    None => {
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
+                    },
+                    Some(val) => {
+                        scalars.push(*val);
+                    },
+                };
+            }
+
+            return Ok(Box::new(scalars));
+        }
+    )
+);
+
 macro_rules! try_make_batch_array (
     ( $name:ident, $features:ident, $dtype:ty ) => (
         let correct_guess = match $features[0].downcast_ref::<$dtype>() {
@@ -859,6 +888,12 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
         let batch = tch::Tensor::stack(&tensors, 0);
         return Ok(Box::new(batch));
     }
+
+    try_make_batch_scalar!(name, features, u8);
+    try_make_batch_scalar!(name, features, f32);
+    try_make_batch_scalar!(name, features, f64);
+    try_make_batch_scalar!(name, features, i32);
+    try_make_batch_scalar!(name, features, i64);
 
     try_make_batch_array!(name, features, ArrayD<u8>);
     try_make_batch_array!(name, features, ArrayD<f32>);
