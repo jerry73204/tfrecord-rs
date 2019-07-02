@@ -448,7 +448,10 @@ pub fn decode_image_on_example<S>(
             result.insert(name, Box::new(images));
         }
         else {
-            return Err(UnsuportedValueTypeError.into());
+            let err = UnsuportedValueTypeError {
+                key_name: name.to_owned(),
+            };
+            return Err(err.into());
         }
     }
 
@@ -738,7 +741,10 @@ fn try_convert_to_tensor(
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i32>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i64>);
 
-    Err(UnsuportedValueTypeError.into())
+    let err = UnsuportedValueTypeError {
+        key_name: name.to_owned(),
+    };
+    Err(err.into())
 }
 
 pub fn example_to_torch_tensor(
@@ -775,7 +781,10 @@ macro_rules! try_make_batch_array (
             for array_ref in $features.drain(..) {
                 match array_ref.downcast_ref::<$dtype>() {
                     None => {
-                        return Err(InconsistentValueTypeError.into());
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
                     },
                     Some(array) => {
                         let new_array = array.to_owned().insert_axis(Axis(0));
@@ -807,7 +816,10 @@ macro_rules! try_make_batch_arrayview (
             for array_ref in $features.drain(..) {
                 match array_ref.downcast_ref::<$dtype>() {
                     None => {
-                        return Err(InconsistentValueTypeError.into());
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
                     },
                     Some(array) => {
                         let new_array = array.to_owned().insert_axis(Axis(0));
@@ -833,7 +845,10 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
         for tensor_ref in features.into_iter() {
             match tensor_ref.downcast_ref::<tch::Tensor>() {
                 None => {
-                    return Err(InconsistentValueTypeError.into());
+                    let err = InconsistentValueTypeError {
+                        key_name: name.to_owned(),
+                    };
+                    return Err(err.into());
                 },
                 Some(tensor) => {
                     tensors.push(tensor.shallow_clone());
@@ -905,7 +920,10 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
     try_make_batch_arrayview!(name, features, ArrayView4<i32>);
     try_make_batch_arrayview!(name, features, ArrayView4<i64>);
 
-    return Err(UnsuportedValueTypeError.into());
+    let err = UnsuportedValueTypeError {
+        key_name: name.to_owned(),
+    };
+    Err(err.into())
 }
 
 pub fn make_batch(
