@@ -852,8 +852,8 @@ macro_rules! try_make_batch_vec (
                 };
             }
 
-            let result = Array2::from_shape_vec((n_vecs, expect_len), flat_vec);
-            return Ok(Box::new(result));
+            let array = Array2::from_shape_vec((n_vecs, expect_len), flat_vec)?;
+            return Ok(Box::new(array));
         }
     )
 );
