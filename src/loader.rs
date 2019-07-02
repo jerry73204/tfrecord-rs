@@ -1,25 +1,22 @@
-use std::io;
-use std::io::{Seek, Read, BufReader};
+use std::io::{self, Seek, Read, BufReader};
 use std::vec;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::fs;
 use std::fs::File;
-use std::error;
 use crc::crc32;
 use byteorder::{ReadBytesExt, LittleEndian};
 use rayon::prelude::*;
-use crate::error::{make_checksum_error, make_truncated_error, make_loader_error};
-
-// Helper functions
+use failure::Fallible;
+use crate::error::ChecksumMismatchError;
 
 fn checksum(buf: &[u8]) -> u32 {
     let cksum = crc32::checksum_castagnoli(buf);
     ((cksum >> 15) | (cksum << 17)).wrapping_add(0xa282ead8u32)
 }
 
-fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>, io::Error> where
+fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Fallible<Option<u64>> where
     R: io::Read {
     let mut len_buf = [0u8; 8];
 
@@ -30,14 +27,16 @@ fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>,
             debug!("Get record length {}", len);
 
             if check_integrity {
-                let answer_cksum = reader.read_u32::<LittleEndian>()?;
-                let len_cksum = checksum(&len_buf);
-                if answer_cksum == len_cksum {
+                let expect_cksum = reader.read_u32::<LittleEndian>()?;
+                let found_cksum = checksum(&len_buf);
+                if expect_cksum == found_cksum {
                     Ok(Some(len))
                 }
                 else {
-
-                    Err(make_checksum_error(answer_cksum, len_cksum))
+                    Err(ChecksumMismatchError {
+                        expect: format!("{:#010x}", expect_cksum),
+                        found: format!("{:#010x}", found_cksum),
+                    }.into())
                 }
             }
             else {
@@ -47,25 +46,28 @@ fn try_read_len<R>(reader: &mut R, check_integrity: bool) -> Result<Option<u64>,
                 Ok(Some(len))
             }
         }
-        Ok(_) => Err(make_truncated_error()),
-        Err(e) => Err(e),
+        Ok(_) => Err(io::Error::new(io::ErrorKind::UnexpectedEof, "File truncated").into()),
+        Err(err) => Err(err.into()),
     }
 }
 
-fn try_read_record<R>(reader: &mut R, len: usize, check_integrity: bool) -> Result<Vec<u8>, io::Error> where
+fn try_read_record<R>(reader: &mut R, len: usize, check_integrity: bool) -> Fallible<Vec<u8>> where
     R: io::Read + io::Seek {
 
     let mut buf = Vec::<u8>::new();
     buf.resize(len, 0);
     reader.read_exact(&mut buf)?;
-    let answer_cksum = reader.read_u32::<LittleEndian>()?;
+    let expect_cksum = reader.read_u32::<LittleEndian>()?;
 
     if check_integrity {
 
-        let record_cksum = checksum(&buf);
-        if answer_cksum != record_cksum {
+        let found_cksum = checksum(&buf);
+        if expect_cksum != found_cksum {
 
-            return Err(make_checksum_error(answer_cksum, record_cksum));
+            return Err(ChecksumMismatchError {
+                expect: format!("{:#010x}", expect_cksum),
+                found: format!("{:#010x}", found_cksum),
+            }.into());
         }
     }
 
@@ -76,9 +78,9 @@ pub fn build_indexes_from_paths(
     paths: Vec<PathBuf>,
     check_integrity: bool,
     parallel: bool,
-) -> Result<Vec<(Arc<PathBuf>, Vec<(usize, usize)>)>, io::Error> {
+) -> Fallible<Vec<(Arc<PathBuf>, Vec<(usize, usize)>)>> {
 
-    let load_file = |path: PathBuf| -> Result<_, io::Error> {
+    let load_file = |path: PathBuf| -> Fallible<_> {
         debug!("Loading index on \"{}\"", path.display());
         let mut file = BufReader::new(File::open(&path)?);
         let index = build_index_from_reader(&mut file, check_integrity)?;
@@ -86,7 +88,7 @@ pub fn build_indexes_from_paths(
     };
 
     let indexes = if parallel {
-        let indexes_result: Result<Vec<_>, io::Error> = paths.into_par_iter()
+        let indexes_result: Fallible<Vec<_>> = paths.into_par_iter()
             .map(load_file)
             .collect();
 
@@ -98,7 +100,7 @@ pub fn build_indexes_from_paths(
     }
     else {
 
-        let indexes_result: Result<Vec<_>, io::Error> = paths.into_iter()
+        let indexes_result: Fallible<Vec<_>> = paths.into_iter()
             .map(load_file)
             .collect();
         let mut indexes = indexes_result?;
@@ -111,7 +113,7 @@ pub fn build_indexes_from_paths(
     Ok(indexes)
 }
 
-pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Result<Vec<(usize, usize)>, io::Error> where
+pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Fallible<Vec<(usize, usize)>> where
     R: io::Read + io::Seek {
 
     let mut index: Vec<(usize, usize)> = Vec::new();
@@ -126,12 +128,14 @@ pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Resu
                     let mut buf = Vec::<u8>::new();
                     buf.resize(len as usize, 0);
                     reader.read_exact(&mut buf)?;
-                    let answer_cksum = reader.read_u32::<LittleEndian>()?;
-                    let record_cksum = checksum(&buf);
+                    let expect_cksum = reader.read_u32::<LittleEndian>()?;
+                    let found_cksum = checksum(&buf);
 
-                    if answer_cksum != record_cksum {
-
-                        return Err(make_checksum_error(answer_cksum, record_cksum));
+                    if expect_cksum != found_cksum {
+                        return Err(ChecksumMismatchError {
+                            expect: format!("{:#010x}", expect_cksum),
+                            found: format!("{:#010x}", found_cksum),
+                        }.into());
                     }
                 }
                 else {
@@ -147,7 +151,7 @@ pub fn build_index_from_reader<R>(reader: &mut R, check_integrity: bool) -> Resu
     Ok(index)
 }
 
-pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<(usize, usize)>, io::Error> {
+pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Fallible<Vec<(usize, usize)>> {
 
     let mut index: Vec<(usize, usize)> = Vec::new();
     let mut offset = 0usize;
@@ -164,12 +168,15 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
         if check_integrity {
 
             let cksum_buf = &buf[offset..(offset + cksum_size)];
-            let answer_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
-            let len_cksum = checksum(len_buf);
+            let expect_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
+            let found_cksum = checksum(len_buf);
 
-            if answer_cksum != len_cksum {
+            if expect_cksum != found_cksum {
 
-                return Err(make_checksum_error(answer_cksum, len_cksum));
+                return Err(ChecksumMismatchError {
+                    expect: format!("{:#010x}", expect_cksum),
+                    found: format!("{:#010x}", found_cksum),
+                }.into());
             }
         }
         offset += cksum_size;
@@ -179,14 +186,16 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
         if check_integrity {
 
             let record_buf = &buf[offset..(offset + len)];
-            let record_cksum = checksum(record_buf);
+            let found_cksum = checksum(record_buf);
 
             let cksum_buf = &buf[(offset + len)..(offset + len + cksum_size)];
-            let answer_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
+            let expect_cksum = (&cksum_buf[..]).read_u32::<LittleEndian>()?;
 
-            if answer_cksum != record_cksum {
-
-                return Err(make_checksum_error(answer_cksum, record_cksum));
+            if expect_cksum != found_cksum {
+                return Err(ChecksumMismatchError {
+                    expect: format!("{:#010x}", expect_cksum),
+                    found: format!("{:#010x}", found_cksum),
+                }.into());
             }
         }
         offset += len + cksum_size;
@@ -199,14 +208,13 @@ pub fn build_index_from_buffer(buf: &[u8], check_integrity: bool) -> Result<Vec<
 
 // traits
 
-pub trait Loader<A, L, E>: Sized where
-    E: error::Error, {
+pub trait Loader<A, L>: Sized {
 
-    fn load(arg: A) -> Result<L, E> {
+    fn load(arg: A) -> Fallible<L> {
 
         Self::load_ex(arg, Default::default())
     }
-    fn load_ex(_: A, _: LoaderOptions) -> Result<L, E>;
+    fn load_ex(_: A, _: LoaderOptions) -> Fallible<L>;
 }
 
 // Type aliases
@@ -318,7 +326,7 @@ impl IndexedLoader {
         let offset = *offset_ref;
         let len = *len_ref;
 
-        let read_from_file = |file: &mut BufReader<File>, off: usize, len: usize| -> Result<Vec<u8>, io::Error> {
+        let read_from_file = |file: &mut BufReader<File>, off: usize, len: usize| -> Fallible<Vec<u8>> {
             let mut buf = vec![0u8; len];
             file.seek(io::SeekFrom::Start(off as u64))?;
             file.read_exact(&mut buf)?;
@@ -411,37 +419,26 @@ impl IndexedLoader {
 }
 
 
-impl Loader<&str, IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<&str, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(path_str: &str, options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         IndexedLoader::load_ex(path_str.to_owned(), options)
     }
 }
 
-impl Loader<String, IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<String, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(path_str: String, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(path_str: String, options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         let path = PathBuf::from(path_str);
         IndexedLoader::load_ex(path, options)
     }
 }
 
-impl Loader<Vec<&str>, IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<Vec<&str>, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
-
-        let paths: Vec<_> = path_strs.into_iter()
-            .map(|orig| PathBuf::from(orig))
-            .collect();
-        IndexedLoader::load_ex(paths, options)
-    }
-}
-
-impl Loader<Vec<String>, IndexedLoader, io::Error> for IndexedLoader {
-
-    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         let paths: Vec<_> = path_strs.into_iter()
             .map(|orig| PathBuf::from(orig))
@@ -450,35 +447,46 @@ impl Loader<Vec<String>, IndexedLoader, io::Error> for IndexedLoader {
     }
 }
 
-impl Loader<&[&Path], IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<Vec<String>, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Fallible<IndexedLoader> {
+
+        let paths: Vec<_> = path_strs.into_iter()
+            .map(|orig| PathBuf::from(orig))
+            .collect();
+        IndexedLoader::load_ex(paths, options)
+    }
+}
+
+impl Loader<&[&Path], IndexedLoader> for IndexedLoader {
+
+    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         IndexedLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<Vec<&Path>, IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<Vec<&Path>, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         IndexedLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<&Path, IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<&Path, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(path: &Path, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(path: &Path, options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         IndexedLoader::load_ex(path.to_owned(), options)
     }
 }
 
-impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<PathBuf, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(path: PathBuf, options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         let meta = fs::metadata(&path).unwrap();
         if meta.is_dir() {
@@ -501,25 +509,23 @@ impl Loader<PathBuf, IndexedLoader, io::Error> for IndexedLoader {
             IndexedLoader::load_ex(paths, options)
         }
         else if meta.is_file() {
-
             let path_list = vec![path];
             IndexedLoader::load_ex(path_list, options)
         }
         else {
-
-            let path_str = match path.to_str() {
-
-                Some(path_str) => path_str,
-                None => "",
-            };
-            Err(make_loader_error(path_str))
+            Err(
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    path.display().to_string(),
+                ).into()
+            )
         }
     }
 }
 
-impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader {
+impl Loader<Vec<PathBuf>, IndexedLoader> for IndexedLoader {
 
-    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<IndexedLoader, io::Error> {
+    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Fallible<IndexedLoader> {
 
         let record_indexes = build_indexes_from_paths(paths, options.check_integrity, options.parallel).unwrap();
 
@@ -561,37 +567,26 @@ impl Loader<Vec<PathBuf>, IndexedLoader, io::Error> for IndexedLoader {
 }
 
 
-impl Loader<&str, SeqLoader, io::Error> for SeqLoader {
+impl Loader<&str, SeqLoader> for SeqLoader {
 
-    fn load_ex(path_str: &str, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(path_str: &str, options: LoaderOptions) -> Fallible<SeqLoader> {
 
         SeqLoader::load_ex(path_str.to_owned(), options)
     }
 }
 
-impl Loader<String, SeqLoader, io::Error> for SeqLoader {
+impl Loader<String, SeqLoader> for SeqLoader {
 
-    fn load_ex(path_str: String, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(path_str: String, options: LoaderOptions) -> Fallible<SeqLoader> {
 
         let path = PathBuf::from(path_str);
         SeqLoader::load_ex(path, options)
     }
 }
 
-impl Loader<Vec<&str>, SeqLoader, io::Error> for SeqLoader {
+impl Loader<Vec<&str>, SeqLoader> for SeqLoader {
 
-    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
-
-        let paths: Vec<_> = path_strs.into_iter()
-            .map(|orig| PathBuf::from(orig))
-            .collect();
-        SeqLoader::load_ex(paths, options)
-    }
-}
-
-impl Loader<Vec<String>, SeqLoader, io::Error> for SeqLoader {
-
-    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(path_strs: Vec<&str>, options: LoaderOptions) -> Fallible<SeqLoader> {
 
         let paths: Vec<_> = path_strs.into_iter()
             .map(|orig| PathBuf::from(orig))
@@ -600,35 +595,46 @@ impl Loader<Vec<String>, SeqLoader, io::Error> for SeqLoader {
     }
 }
 
-impl Loader<&[&Path], SeqLoader, io::Error> for SeqLoader {
+impl Loader<Vec<String>, SeqLoader> for SeqLoader {
 
-    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(path_strs: Vec<String>, options: LoaderOptions) -> Fallible<SeqLoader> {
+
+        let paths: Vec<_> = path_strs.into_iter()
+            .map(|orig| PathBuf::from(orig))
+            .collect();
+        SeqLoader::load_ex(paths, options)
+    }
+}
+
+impl Loader<&[&Path], SeqLoader> for SeqLoader {
+
+    fn load_ex(paths: &[&Path], options: LoaderOptions) -> Fallible<SeqLoader> {
 
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         SeqLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<Vec<&Path>, SeqLoader, io::Error> for SeqLoader {
+impl Loader<Vec<&Path>, SeqLoader> for SeqLoader {
 
-    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(paths: Vec<&Path>, options: LoaderOptions) -> Fallible<SeqLoader> {
 
         let cloned_paths: Vec<_> = paths.into_iter().map(|p| p.to_path_buf()).collect();
         SeqLoader::load_ex(cloned_paths, options)
     }
 }
 
-impl Loader<&Path, SeqLoader, io::Error> for SeqLoader {
+impl Loader<&Path, SeqLoader> for SeqLoader {
 
-    fn load_ex(path: &Path, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(path: &Path, options: LoaderOptions) -> Fallible<SeqLoader> {
 
         SeqLoader::load_ex(path.to_owned(), options)
     }
 }
 
-impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader {
+impl Loader<PathBuf, SeqLoader> for SeqLoader {
 
-    fn load_ex(path: PathBuf, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(path: PathBuf, options: LoaderOptions) -> Fallible<SeqLoader> {
 
         let meta = fs::metadata(&path).unwrap();
         if meta.is_dir() {
@@ -638,7 +644,6 @@ impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader {
                 .filter_map(|entry_ret| {
                     let entry = entry_ret.unwrap();
                     let meta = entry.metadata().unwrap();
-                    // let fname = entry.file_name().into_string().unwrap();
 
                     if meta.is_file() {
                         Some(entry.path())
@@ -651,25 +656,23 @@ impl Loader<PathBuf, SeqLoader, io::Error> for SeqLoader {
             SeqLoader::load_ex(paths, options)
         }
         else if meta.is_file() {
-
             let path_list = vec![path];
             SeqLoader::load_ex(path_list, options)
         }
         else {
-
-            let path_str = match path.to_str() {
-
-                Some(path_str) => path_str,
-                None => "",
-            };
-            Err(make_loader_error(path_str))
+            Err(
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    path.display().to_string(),
+                ).into()
+            )
         }
     }
 }
 
-impl Loader<Vec<PathBuf>, SeqLoader, io::Error> for SeqLoader {
+impl Loader<Vec<PathBuf>, SeqLoader> for SeqLoader {
 
-    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Result<SeqLoader, io::Error> {
+    fn load_ex(paths: Vec<PathBuf>, options: LoaderOptions) -> Fallible<SeqLoader> {
 
         let paths_iter = paths.into_iter();
         let file_opt = None;

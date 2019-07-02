@@ -1,15 +1,20 @@
-use std::io::{self, Cursor};
-use std::any::Any;
+use std::io::Cursor;
 use std::borrow::Borrow;
 use std::cmp::Eq;
 use std::hash::Hash;
+use std::any::{Any, TypeId};
 use std::mem::transmute;
 use std::panic::catch_unwind;
 use std::fmt::Display;
 use std::collections::{HashMap, HashSet};
-use ndarray::{self, ArrayD, Array1, Array2, Array3, Array4,
-              ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
-              Axis};
+use std::collections::hash_map::Entry;
+use std::sync::{Mutex, Arc, Once};
+use ndarray::{
+    self,
+    ArrayD, Array1, Array2, Array3, Array4,
+    ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
+    Axis,
+};
 use tch;
 use image::{ImageFormat, ImageDecoder};
 use image::png::PNGDecoder;
@@ -20,31 +25,242 @@ use image::tiff::TIFFDecoder;
 use image::tga::TGADecoder;
 use image::bmp::BMPDecoder;
 use image::ico::ICODecoder;
-use crate::{ExampleType, FeatureType, ErrorType};
-use crate::parser;
-use crate::error::ParseError;
+use failure::Fallible;
+use crate::{ExampleType, FeatureType};
+use crate::parse::{parse_single_example, FeatureList};
+use crate::error::{
+    ItemNotFoundError,
+    UnsuportedImageFormatError,
+    UnsuportedValueTypeError,
+    InconsistentValueTypeError,
+};
+use crate::convert::ToTorchTensor;
+
+// type ToTorchCallback = Box<dyn Fn(FeatureType, tch::Device) -> FeatureType>;
+
+// macro_rules! add_array_to_torch_map (
+//     ( $map:ident, $dtype:ty ) => (
+//         let type_id = TypeId::of::<$dtype>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<$dtype>().unwrap();
+//                 let mid: ToTorchTensor<&$dtype> = value.into();
+//                 let tensor: tch::Tensor = mid.into();
+//                 let tensor = tensor.to_device(device);
+//                 let result: FeatureType = Box::new(tensor);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// macro_rules! add_vec_array_to_torch_map (
+//     ( $map:ident, $dtype:ty ) => (
+//         let type_id = TypeId::of::<Vec<$dtype>>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<Vec<$dtype>>().unwrap();
+//                 let mid: ToTorchTensor<&Vec<$dtype>> = value.into();
+//                 let tensors: Vec<tch::Tensor> = mid.into();
+//                 let tensors: Vec<tch::Tensor> = tensors
+//                     .into_iter()
+//                     .map(|tensor| tensor.to_device(device))
+//                     .collect();
+//                 let result: FeatureType = Box::new(tensors);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// macro_rules! add_arrayview_to_torch_map (
+//     ( $map:ident, $owned_type:ty, $view_type:ty ) => (
+//         let type_id = TypeId::of::<$view_type>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<$view_type>().unwrap();
+//                 let mid: ToTorchTensor<$owned_type> = value.to_owned().into();
+//                 let tensor: tch::Tensor = mid.into();
+//                 let tensor = tensor.to_device(device);
+//                 let result: FeatureType = Box::new(tensor);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// macro_rules! add_vec_arrayview_to_torch_map (
+//     ( $map:ident, $owned_type:ty, $view_type:ty ) => (
+//         let type_id = TypeId::of::<Vec<$view_type>>();
+//         let convert_fn: ToTorchCallback = Box::new(
+//             |value_any: FeatureType, device: tch::Device| -> FeatureType {
+//                 let value = value_any.downcast_ref::<Vec<$view_type>>().unwrap();
+//                 let mid: ToTorchTensor<Vec<$owned_type>> = value.into_iter()
+//                     .map(|array| array.to_owned())
+//                     .collect::<Vec<$owned_type>>()
+//                     .into();
+//                 let tensors: Vec<tch::Tensor> = mid.into();
+//                 let tensors: Vec<tch::Tensor> = tensors.into_iter()
+//                     .map(|tensor| tensor.to_device(device))
+//                     .collect();
+//                 let result: FeatureType = Box::new(tensors);
+//                 result
+//             }
+//         );
+
+//         $map.insert(type_id, convert_fn);
+//     )
+// );
+
+// thread_local! {
+//     static INIT_TO_TORCH_MAP: Once = Once::new();
+//     static TO_TORCH_MAP: HashMap<TypeId, ToTorchCallback> = {
+//         let mut map = HashMap::new();
+
+//         add_array_to_torch_map!(map, ArrayD<u8>);
+//         add_array_to_torch_map!(map, ArrayD<f32>);
+//         add_array_to_torch_map!(map, ArrayD<f64>);
+//         add_array_to_torch_map!(map, ArrayD<i32>);
+//         add_array_to_torch_map!(map, ArrayD<i64>);
+
+//         add_array_to_torch_map!(map, Array1<u8>);
+//         add_array_to_torch_map!(map, Array1<f32>);
+//         add_array_to_torch_map!(map, Array1<f64>);
+//         add_array_to_torch_map!(map, Array1<i32>);
+//         add_array_to_torch_map!(map, Array1<i64>);
+
+//         add_array_to_torch_map!(map, Array2<u8>);
+//         add_array_to_torch_map!(map, Array2<f32>);
+//         add_array_to_torch_map!(map, Array2<f64>);
+//         add_array_to_torch_map!(map, Array2<i32>);
+//         add_array_to_torch_map!(map, Array2<i64>);
+
+//         add_array_to_torch_map!(map, Array3<u8>);
+//         add_array_to_torch_map!(map, Array3<f32>);
+//         add_array_to_torch_map!(map, Array3<f64>);
+//         add_array_to_torch_map!(map, Array3<i32>);
+//         add_array_to_torch_map!(map, Array3<i64>);
+
+//         add_array_to_torch_map!(map, Array4<u8>);
+//         add_array_to_torch_map!(map, Array4<f32>);
+//         add_array_to_torch_map!(map, Array4<f64>);
+//         add_array_to_torch_map!(map, Array4<i32>);
+//         add_array_to_torch_map!(map, Array4<i64>);
+
+//         add_vec_array_to_torch_map!(map, ArrayD<u8>);
+//         add_vec_array_to_torch_map!(map, ArrayD<f32>);
+//         add_vec_array_to_torch_map!(map, ArrayD<f64>);
+//         add_vec_array_to_torch_map!(map, ArrayD<i32>);
+//         add_vec_array_to_torch_map!(map, ArrayD<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array1<u8>);
+//         add_vec_array_to_torch_map!(map, Array1<f32>);
+//         add_vec_array_to_torch_map!(map, Array1<f64>);
+//         add_vec_array_to_torch_map!(map, Array1<i32>);
+//         add_vec_array_to_torch_map!(map, Array1<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array2<u8>);
+//         add_vec_array_to_torch_map!(map, Array2<f32>);
+//         add_vec_array_to_torch_map!(map, Array2<f64>);
+//         add_vec_array_to_torch_map!(map, Array2<i32>);
+//         add_vec_array_to_torch_map!(map, Array2<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array3<u8>);
+//         add_vec_array_to_torch_map!(map, Array3<f32>);
+//         add_vec_array_to_torch_map!(map, Array3<f64>);
+//         add_vec_array_to_torch_map!(map, Array3<i32>);
+//         add_vec_array_to_torch_map!(map, Array3<i64>);
+
+//         add_vec_array_to_torch_map!(map, Array4<u8>);
+//         add_vec_array_to_torch_map!(map, Array4<f32>);
+//         add_vec_array_to_torch_map!(map, Array4<f64>);
+//         add_vec_array_to_torch_map!(map, Array4<i32>);
+//         add_vec_array_to_torch_map!(map, Array4<i64>);
+
+//         add_arrayview_to_torch_map!(map, ArrayD<u8>, ArrayViewD<u8>);
+//         add_arrayview_to_torch_map!(map, ArrayD<f32>, ArrayViewD<f32>);
+//         add_arrayview_to_torch_map!(map, ArrayD<f64>, ArrayViewD<f64>);
+//         add_arrayview_to_torch_map!(map, ArrayD<i32>, ArrayViewD<i32>);
+//         add_arrayview_to_torch_map!(map, ArrayD<i64>, ArrayViewD<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array1<u8>, ArrayView1<u8>);
+//         add_arrayview_to_torch_map!(map, Array1<f32>, ArrayView1<f32>);
+//         add_arrayview_to_torch_map!(map, Array1<f64>, ArrayView1<f64>);
+//         add_arrayview_to_torch_map!(map, Array1<i32>, ArrayView1<i32>);
+//         add_arrayview_to_torch_map!(map, Array1<i64>, ArrayView1<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array2<u8>, ArrayView2<u8>);
+//         add_arrayview_to_torch_map!(map, Array2<f32>, ArrayView2<f32>);
+//         add_arrayview_to_torch_map!(map, Array2<f64>, ArrayView2<f64>);
+//         add_arrayview_to_torch_map!(map, Array2<i32>, ArrayView2<i32>);
+//         add_arrayview_to_torch_map!(map, Array2<i64>, ArrayView2<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array3<u8>, ArrayView3<u8>);
+//         add_arrayview_to_torch_map!(map, Array3<f32>, ArrayView3<f32>);
+//         add_arrayview_to_torch_map!(map, Array3<f64>, ArrayView3<f64>);
+//         add_arrayview_to_torch_map!(map, Array3<i32>, ArrayView3<i32>);
+//         add_arrayview_to_torch_map!(map, Array3<i64>, ArrayView3<i64>);
+
+//         add_arrayview_to_torch_map!(map, Array4<u8>, ArrayView4<u8>);
+//         add_arrayview_to_torch_map!(map, Array4<f32>, ArrayView4<f32>);
+//         add_arrayview_to_torch_map!(map, Array4<f64>, ArrayView4<f64>);
+//         add_arrayview_to_torch_map!(map, Array4<i32>, ArrayView4<i32>);
+//         add_arrayview_to_torch_map!(map, Array4<i64>, ArrayView4<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<u8>, ArrayViewD<u8>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<f32>, ArrayViewD<f32>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<f64>, ArrayViewD<f64>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<i32>, ArrayViewD<i32>);
+//         add_vec_arrayview_to_torch_map!(map, ArrayD<i64>, ArrayViewD<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array1<u8>, ArrayView1<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<f32>, ArrayView1<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<f64>, ArrayView1<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<i32>, ArrayView1<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array1<i64>, ArrayView1<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array2<u8>, ArrayView2<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<f32>, ArrayView2<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<f64>, ArrayView2<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<i32>, ArrayView2<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array2<i64>, ArrayView2<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array3<u8>, ArrayView3<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<f32>, ArrayView3<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<f64>, ArrayView3<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<i32>, ArrayView3<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array3<i64>, ArrayView3<i64>);
+
+//         add_vec_arrayview_to_torch_map!(map, Array4<u8>, ArrayView4<u8>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<f32>, ArrayView4<f32>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<f64>, ArrayView4<f64>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<i32>, ArrayView4<i32>);
+//         add_vec_arrayview_to_torch_map!(map, Array4<i64>, ArrayView4<i64>);
+
+//         map
+//     };
+// }
 
 pub fn bytes_to_example<'a>(
     buf: &[u8],
     names_opt: Option<HashSet<&str>>
-) -> Result<ExampleType, ErrorType>
+) -> Fallible<ExampleType>
 {
-    let example = match parser::parse_single_example(buf.borrow()) {
-        Err(e) => return Err(Box::new(e)),
-        Ok(example) => example,
-    };
-
-    let (_, entries) = match filter_entries(example, names_opt) {
-        Ok(ret) => ret,
-        Err(err) => return Err(Box::new(err)),
-    };
+    let example = parse_single_example(buf.borrow())?;
+    let (_, entries) = filter_entries(example, names_opt)?;
 
     let mut result = HashMap::new();
     for (name, value) in entries {
         let parsed_value: FeatureType = match value {
-            parser::FeatureList::Bytes(val) => Box::new(val),
-            parser::FeatureList::F32(val) => Box::new(val),
-            parser::FeatureList::I64(val) => Box::new(val),
+            FeatureList::Bytes(val) => Box::new(val),
+            FeatureList::F32(val) => Box::new(val),
+            FeatureList::I64(val) => Box::new(val),
         };
 
         result.insert(name, parsed_value);
@@ -56,7 +272,7 @@ pub fn bytes_to_example<'a>(
 pub fn filter_entries<V>(
     mut map: HashMap<String, V>,
     names_opt: Option<HashSet<&str>>
-) -> Result<(HashMap<String, V>, Vec<(String, V)>), ParseError>
+) -> Fallible<(HashMap<String, V>, Vec<(String, V)>)>
 {
     let mut new_map = HashMap::new();
     let entries: Vec<_> = match names_opt {
@@ -66,8 +282,7 @@ pub fn filter_entries<V>(
                 let entry = match map.remove_entry(name as &str) {
                     Some(entry) => entry,
                     None => {
-                        let err = ParseError::new(&format!("Feature with name \"{}\" is not found", name));
-                        return Err(err);
+                        return Err(ItemNotFoundError { name: name.to_owned() }.into());
                     }
                 };
                 entries.push(entry);
@@ -83,135 +298,78 @@ pub fn filter_entries<V>(
 }
 
 
-fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Result<Array3<u8>, ErrorType> {
+fn try_decode_image(bytes: &[u8], format_opt: Option<ImageFormat>) -> Fallible<Array3<u8>> {
     let format = match format_opt {
         Some(format) => format,
         None => {
-            match image::guess_format(bytes) {
-                Ok(format) => format,
-                Err(err) => return Err(Box::new(err)),
-            }
+            image::guess_format(bytes)?
         }
     };
 
     let (image, (width, height, channels)) = match format {
         ImageFormat::PNG => {
-            match PNGDecoder::new(bytes) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = PNGDecoder::new(bytes)?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         ImageFormat::JPEG => {
-            match  decode_jpeg(&bytes) {
-                Err(err) => return Err(Box::new(err)),
-                Ok((image, dims)) => (image, dims),
-            }
+            let (image, dims) = decode_jpeg(&bytes)?;
+            (image, dims)
         }
         ImageFormat::GIF => {
-            match GIFDecoder::new(bytes) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = GIFDecoder::new(bytes)?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         ImageFormat::WEBP => {
-            match WebpDecoder::new(bytes) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = WebpDecoder::new(bytes)?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         ImageFormat::PNM => {
-            match PNMDecoder::new(bytes) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = PNMDecoder::new(bytes)?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         ImageFormat::TIFF => {
-            match TIFFDecoder::new(Cursor::new(bytes)) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = TIFFDecoder::new(Cursor::new(bytes))?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         ImageFormat::TGA => {
-            match TGADecoder::new(Cursor::new(bytes)) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = TGADecoder::new(Cursor::new(bytes))?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         ImageFormat::BMP => {
-            match BMPDecoder::new(Cursor::new(bytes)) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = BMPDecoder::new(Cursor::new(bytes))?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         ImageFormat::ICO => {
-            match ICODecoder::new(Cursor::new(bytes)) {
-                Ok(decoder) => {
-                    let (width, height) = decoder.dimensions();
-                    match decoder.read_image() {
-                        Ok(image) => (image, (width as usize, height as usize, 3)),
-                        Err(err) => return Err(Box::new(err)),
-                    }
-                },
-                Err(err) => return Err(Box::new(err)),
-            }
+            let decoder = ICODecoder::new(Cursor::new(bytes))?;
+            let (width, height) = decoder.dimensions();
+            let image = decoder.read_image()?;
+            (image, (width as usize, height as usize, 3))
         }
         _ => {
-            let err = ParseError::new(&format!("Image format is not supported"));
-            return Err(Box::new(err));
+            return Err(UnsuportedImageFormatError.into());
         }
     };
 
-    let array = match Array3::from_shape_vec((height, width, channels), image) {
-        Err(err) => return Err(Box::new(err)),
-        Ok(array) => array,
-    };
+    let array = Array3::from_shape_vec((height, width, channels), image)?;
     Ok(array)
 }
 
-fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::Error> {
-    catch_unwind(|| -> Result<_, io::Error> {
+fn decode_jpeg(data: &[u8]) -> Fallible<(Vec<u8>, (usize, usize, usize))> {
+    catch_unwind(|| -> Fallible<_> {
         let decompress = mozjpeg::Decompress::with_markers(mozjpeg::ALL_MARKERS)
             .from_mem(data)?;
         let (width, height) = decompress.size();
@@ -249,7 +407,7 @@ fn decode_jpeg(data: &[u8]) -> Result<(Vec<u8>, (usize, usize, usize)), io::Erro
 pub fn decode_image_on_example<S>(
     mut example: ExampleType,
     formats_opt: Option<HashMap<S, Option<ImageFormat>>>,
-) -> Result<ExampleType, ErrorType> where
+) -> Fallible<ExampleType> where
     S: AsRef<str> + Hash + Eq + Display + Send
 {
     let mut result = ExampleType::new();
@@ -257,11 +415,11 @@ pub fn decode_image_on_example<S>(
         Some(formats) => {
             let mut entries = Vec::new();
             for (select_name, format_opt) in formats {
-                let (name, value_ref) = match example.remove_entry(select_name.as_ref()) {
+                let select_name_ = select_name.as_ref();
+                let (name, value_ref) = match example.remove_entry(select_name_) {
                     Some(entry) => entry,
                     None => {
-                        let err = ParseError::new(&format!("Name \"{}\" is not found in example", select_name));
-                        return Err(Box::new(err));
+                        return Err(ItemNotFoundError { name: select_name_.to_owned() }.into());
                     }
                 };
 
@@ -278,31 +436,19 @@ pub fn decode_image_on_example<S>(
 
     for (name, value_ref, format_opt) in entries {
         if let Some(bytes) = value_ref.downcast_ref::<Vec<u8>>() {
-            let array = match try_decode_image(bytes, format_opt) {
-                Err(err) => return Err(err),
-                Ok(ret) => ret,
-            };
+            let array = try_decode_image(bytes, format_opt)?;
             result.insert(name, Box::new(array));
         }
         else if let Some(bytes_list) = value_ref.downcast_ref::<Vec<Vec<u8>>>() {
-            if bytes_list.is_empty() {
-                let err = ParseError::new(&format!("Cannot decode empty bytes list with name \"{}\"", name));
-                return Err(Box::new(err));
-            }
-
             let mut images = Vec::new();
             for bytes in bytes_list {
-                let array = match try_decode_image(bytes, format_opt) {
-                    Err(err) => return Err(err),
-                    Ok(ret) => ret,
-                };
+                let array = try_decode_image(bytes, format_opt)?;
                 images.push(array);
             }
             result.insert(name, Box::new(images));
         }
         else {
-            let err = ParseError::new(&format!("Cannot decode non-bytes list feature with name \"{}\"", name));
-            return Err(Box::new(err));
+            return Err(UnsuportedValueTypeError.into());
         }
     }
 
@@ -416,9 +562,24 @@ macro_rules! try_convert_vec_vec_to_torch (
     )
 );
 
-fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device) -> Result<Box<dyn Any + Send>, ErrorType> {
+fn try_convert_to_tensor(
+    name: &str,
+    value_ref: FeatureType,
+    device: tch::Device
+) -> Fallible<FeatureType>
+{
+    // TO_TORCH_MAP.with(|map| {
+    //     let type_id = value_ref.type_id();
+    //     dbg!(map.keys());
+    //     if map.contains_key(&type_id) {
+    //         let result = map[&type_id](value_ref, device);
+    //         Ok(result)
+    //     }
+    //     else {
+    //         Err(UnsuportedValueTypeError.into())
+    //     }
+    // })
 
-    // TODO: optimize type matching
     try_convert_vec_to_torch!(value_ref, device, u8);
     try_convert_vec_to_torch!(value_ref, device, i32);
     try_convert_vec_to_torch!(value_ref, device, i64);
@@ -551,21 +712,16 @@ fn try_convert_to_tensor(name: &str, value_ref: FeatureType, device: tch::Device
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i32>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i64>);
 
-    let err = ParseError::new(&format!("The type of feature with name \"{}\" is not supported to convert to Torch Tensor", name));
-    Err(Box::new(err))
+    Err(UnsuportedValueTypeError.into())
 }
-
 
 pub fn example_to_torch_tensor(
     example: ExampleType,
     names_opt: Option<HashSet<&str>>,
     device: tch::Device,
-) -> Result<ExampleType, ErrorType>
+) -> Fallible<ExampleType>
 {
-    let (mut remaining_example, entries) = match filter_entries(example, names_opt) {
-        Ok(ret) => ret,
-        Err(err) => return Err(Box::new(err)),
-    };
+    let (mut remaining_example, entries) = filter_entries(example, names_opt)?;
 
     let mut result = ExampleType::new();
     for (name, val) in remaining_example.drain() {
@@ -573,10 +729,7 @@ pub fn example_to_torch_tensor(
     }
 
     for (name, feature_ref) in entries {
-        let ret = match try_convert_to_tensor(&name, feature_ref, device) {
-            Err(err) => return Err(err),
-            Ok(ret) => ret,
-        };
+        let ret = try_convert_to_tensor(&name, feature_ref, device)?;
         result.insert(name, ret);
     }
 
@@ -596,8 +749,7 @@ macro_rules! try_make_batch_array (
             for array_ref in $features.drain(..) {
                 match array_ref.downcast_ref::<$dtype>() {
                     None => {
-                        let err = ParseError::new(&format!("Cannot make batch on feature with name \"{}\". Heterogeneous type detected.", $name));
-                        return Err(Box::new(err))
+                        return Err(InconsistentValueTypeError.into());
                     },
                     Some(array) => {
                         let new_array = array.to_owned().insert_axis(Axis(0));
@@ -629,8 +781,7 @@ macro_rules! try_make_batch_arrayview (
             for array_ref in $features.drain(..) {
                 match array_ref.downcast_ref::<$dtype>() {
                     None => {
-                        let err = ParseError::new(&format!("Cannot make batch on feature with name \"{}\". Heterogeneous type detected.", $name));
-                        return Err(Box::new(err))
+                        return Err(InconsistentValueTypeError.into());
                     },
                     Some(array) => {
                         let new_array = array.to_owned().insert_axis(Axis(0));
@@ -649,7 +800,7 @@ macro_rules! try_make_batch_arrayview (
     )
 );
 
-fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Result<FeatureType, ErrorType> {
+fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<FeatureType> {
     try_make_batch_array!(name, features, ArrayD<u8>);
     try_make_batch_array!(name, features, ArrayD<f32>);
     try_make_batch_array!(name, features, ArrayD<f64>);
@@ -710,13 +861,12 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Result<FeatureT
     try_make_batch_arrayview!(name, features, ArrayView4<i32>);
     try_make_batch_arrayview!(name, features, ArrayView4<i64>);
 
-    let err = ParseError::new(&format!("Cannot make batch on feature with name \"{}\". The type is not supported.", name));
-    Err(Box::new(err))
+    return Err(UnsuportedValueTypeError.into());
 }
 
 pub fn make_batch(
     mut examples: Vec<ExampleType>,
-) -> Result<ExampleType, ErrorType> {
+) -> Fallible<ExampleType> {
 
     let names: Vec<_> = examples[0].keys()
         .map(|key| key.to_owned())
@@ -727,10 +877,7 @@ pub fn make_batch(
         let values = examples.iter_mut()
             .map(|example| example.remove(&name).unwrap())
             .collect();
-        let batch = match try_make_batch(&name, values) {
-            Ok(ret) => ret,
-            Err(err) => return Err(err),
-        };
+        let batch =try_make_batch(&name, values)?;
         result.insert(name, batch);
     }
 

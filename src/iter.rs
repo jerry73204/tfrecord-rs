@@ -1,38 +1,32 @@
-use std::io;
-use std::fmt::Debug;
 use std::thread::{self, JoinHandle};
 use std::marker::PhantomData;
 use std::collections::vec_deque::VecDeque;
 use rand::prelude::*;
 use crossbeam::channel::Receiver;
+use failure::Fallible;
 use crate::loader;
-use crate::error::make_load_index_error;
+use crate::error::InvalidRecordIndexError;
 
 // Trait defiintions
 
 pub trait DsIterator: Iterator + Sized {
-    fn unwrap_result<V, E>(self) -> UnwrapResult<Self, V, E> where
+    fn unwrap_result<V>(self) -> UnwrapResult<Self, V> where
         Self: Sized {
-
         UnwrapResult {
             iter: self,
             dummy_value: PhantomData,
-            dummy_error: PhantomData,
         }
     }
 
-    fn unwrap_ok<V, E>(self) -> UnwrapOk<Self, V, E> where
+    fn unwrap_ok<V>(self) -> UnwrapOk<Self, V> where
         Self: Sized {
-
         UnwrapOk {
             iter: self,
             dummy_value: PhantomData,
-            dummy_error: PhantomData,
         }
     }
 
     fn shuffle(self, buf_size: usize) -> Shuffle<Self, StdRng> {
-
         let buffer = VecDeque::with_capacity(buf_size);
         let rng = StdRng::from_entropy();
 
@@ -46,7 +40,6 @@ pub trait DsIterator: Iterator + Sized {
     fn prefetch(mut self, buf_size: usize) -> Prefetch<Self> where
         Self: 'static + Send,
         Self::Item: 'static + Send, {
-
         let (sender, receiver) = crossbeam::channel::bounded(buf_size);
 
         let worker = thread::spawn(move || {
@@ -78,7 +71,6 @@ pub trait DsIterator: Iterator + Sized {
     }
 
     fn load_by_tfrecord_index(self, loader: loader::IndexedLoader) -> LoadByTfRecordIndex<Self> {
-
         LoadByTfRecordIndex {
             iter: self,
             loader,
@@ -88,19 +80,15 @@ pub trait DsIterator: Iterator + Sized {
 
 // Struct definitions
 #[derive(Clone)]
-pub struct UnwrapResult<I, V, E> {
-
+pub struct UnwrapResult<I, V> {
     iter: I,
     dummy_value: PhantomData<V>,
-    dummy_error: PhantomData<E>,
 }
 
 #[derive(Clone)]
-pub struct UnwrapOk<I, V, E> {
-
+pub struct UnwrapOk<I, V> {
     iter: I,
     dummy_value: PhantomData<V>,
-    dummy_error: PhantomData<E>,
 }
 
 #[derive(Clone)]
@@ -111,13 +99,11 @@ pub struct Shuffle<I: Iterator, R: rand::Rng> {
 }
 
 pub struct Prefetch<I: Iterator> {
-
     receiver: Receiver<Option<I::Item>>,
     worker_opt: Option<JoinHandle<()>>,
 }
 
 pub struct LoadByTfRecordIndex<I> {
-
     iter: I,
     loader: loader::IndexedLoader,
 }
@@ -128,31 +114,25 @@ impl<T> DsIterator for T where
     T: Iterator, {
 }
 
-impl<I, V, E> Iterator for UnwrapOk<I, V, E> where
-    I: Iterator<Item=Result<V, E>>, {
-
+impl<I, V> Iterator for UnwrapOk<I, V> where
+    I: Iterator<Item=Fallible<V>>, {
     type Item = V;
 
     fn next(&mut self) -> Option<Self::Item> {
-
         match self.iter.next() {
-
             None => None,
             Some(result) => Some(result.ok().unwrap())
         }
     }
 }
 
-impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
-    I: Iterator<Item=Result<V, E>>,
-    E: Debug + Send, {
-
+impl<I, V> Iterator for UnwrapResult<I, V> where
+    I: Iterator<Item=Fallible<V>>
+{
     type Item = V;
 
     fn next(&mut self) -> Option<Self::Item> {
-
         match self.iter.next() {
-
             None => None,
             Some(result) => Some(result.unwrap())
         }
@@ -161,17 +141,14 @@ impl<I, V, E> Iterator for UnwrapResult<I, V, E> where
 
 impl<I> Iterator for LoadByTfRecordIndex<I> where
     I: Iterator<Item=loader::RecordIndex>, {
-
-    type Item = Result<Vec<u8>, io::Error>;
+    type Item = Fallible<Vec<u8>>;
 
     fn next(&mut self) -> Option<Self::Item> {
-
         match self.iter.next() {
-
             None => None,
             Some(index) => match self.loader.fetch(index) {
                 Some(record) => Some(Ok(record)),
-                None => Some(Err(make_load_index_error())),
+                None => Some(Err(InvalidRecordIndexError.into())),
             }
         }
     }
@@ -208,7 +185,6 @@ impl<I, R> Iterator for Shuffle<I, R> where
 impl<I> Iterator for Prefetch<I> where
     I: Iterator + Send,
     I::Item: Send {
-
     type Item = I::Item;
 
     fn next(&mut self) -> Option<Self::Item> {

@@ -3,18 +3,18 @@ extern crate libflate;
 extern crate par_map;
 
 use std::path::Path;
-use std::error::Error;
 use std::io::{self, BufReader, BufWriter};
 use std::fs::{self, File};
 use libflate::zlib;
 use ndarray::Array3;
 use par_map::ParMap;
+use failure::Fallible;
 use tfrecord_rs::loader::{LoaderOptions, LoaderMethod, IndexedLoader, Loader, SeqLoader};
 use tfrecord_rs::iter::DsIterator;
 use tfrecord_rs::utils::{bytes_to_example, decode_image_on_example, example_to_torch_tensor};
 
 #[test]
-fn parse_example_test() -> Result<(), Box<dyn Error>>
+fn parse_example_test() -> Fallible<()>
 {
     // Prepare file
     let out_path = Path::new("./test_files/parse_example_test.tfrecords");
@@ -45,7 +45,7 @@ fn parse_example_test() -> Result<(), Box<dyn Error>>
 }
 
 #[test]
-fn decode_image_test() -> Result<(), Box<dyn Error>>
+fn decode_image_test() -> Fallible<()>
 {
     // Prepare file
     // The tfrecord is published DeepMind's GQN dataset
@@ -70,7 +70,7 @@ fn decode_image_test() -> Result<(), Box<dyn Error>>
 }
 
 #[test]
-fn parallel_decode_image_test() -> Result<(), Box<dyn Error>>
+fn parallel_decode_image_test() -> Fallible<()>
 {
     // Prepare file
     // The tfrecord is published DeepMind's GQN dataset
@@ -95,7 +95,7 @@ fn parallel_decode_image_test() -> Result<(), Box<dyn Error>>
 }
 
 #[test]
-fn torch_tensor_test() -> Result<(), Box<dyn Error>>
+fn torch_tensor_test() -> Fallible<()>
 {
     // Prepare file
     let path = Path::new("./test_files/rooms_free_camera_with_object_rotations.tfrecords");
@@ -122,20 +122,21 @@ fn torch_tensor_test() -> Result<(), Box<dyn Error>>
     Ok(())
 }
 
-#[test]
-fn parse_event_test() -> Result<(), Box<dyn Error>>
-{
-    // Prepare file
-    let path = Path::new("/path/to/file.tfevents.*");
-    let loader = SeqLoader::load(path)?;
-    let record_cnt = loader
-        .map(|record| tfrecord_rs::parser::parse_event(&record))
-        .unwrap_result()
-        .fold(0, |mut cnt, event| {
-            cnt += 1;
-            cnt
-        });
+// TODO not implemented yet
+// #[test]
+// fn parse_event_test() -> Fallible<()>
+// {
+//     // Prepare file
+//     let path = Path::new("/path/to/file.tfevents.*");
+//     let loader = SeqLoader::load(path)?;
+//     let record_cnt = loader
+//         .map(|record| tfrecord_rs::parse::parse_event(&record))
+//         .unwrap_result()
+//         .fold(0, |mut cnt, event| {
+//             cnt += 1;
+//             cnt
+//         });
 
-    dbg!(record_cnt);
-    Ok(())
-}
+//     dbg!(record_cnt);
+//     Ok(())
+// }
