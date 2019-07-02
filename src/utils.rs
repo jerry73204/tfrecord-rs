@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::sync::{Mutex, Arc, Once};
 use ndarray::{
-    self,
+    self, Array,
     ArrayD, Array1, Array2, Array3, Array4,
     ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
     Axis,
@@ -797,6 +797,43 @@ macro_rules! try_make_batch_scalar (
     )
 );
 
+macro_rules! try_make_batch_vec (
+    ( $name:ident, $features:ident, $dtype:ty ) => (
+        let (correct_guess, expect_len) = match $features[0].downcast_ref::<Vec<$dtype>>() {
+            None => (false, 0),
+            Some(val) => (true, val.len()),
+        };
+
+        if correct_guess {
+            let mut flat_vec = vec![];
+            let n_vecs = $features.len();
+
+            for mut vec_ref in $features.into_iter() {
+                match vec_ref.downcast_mut::<Vec<$dtype>>() {
+                    None => {
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
+                    },
+                    Some(val) => {
+                        if val.len() != expect_len {
+                            let err = InconsistentValueTypeError {
+                                key_name: $name.to_owned(),
+                            };
+                            return Err(err.into());
+                        }
+                        flat_vec.append(val);
+                    },
+                };
+            }
+
+            let result = Array::from_shape_vec((n_vecs, expect_len), flat_vec);
+            return Ok(Box::new(result));
+        }
+    )
+);
+
 macro_rules! try_make_batch_array (
     ( $name:ident, $features:ident, $dtype:ty ) => (
         let correct_guess = match $features[0].downcast_ref::<$dtype>() {
@@ -894,6 +931,12 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
     try_make_batch_scalar!(name, features, f64);
     try_make_batch_scalar!(name, features, i32);
     try_make_batch_scalar!(name, features, i64);
+
+    try_make_batch_vec!(name, features, u8);
+    try_make_batch_vec!(name, features, f32);
+    try_make_batch_vec!(name, features, f64);
+    try_make_batch_vec!(name, features, i32);
+    try_make_batch_vec!(name, features, i64);
 
     try_make_batch_array!(name, features, ArrayD<u8>);
     try_make_batch_array!(name, features, ArrayD<f32>);
