@@ -9,8 +9,6 @@ protobuf = { version = "^2", features = ["with-bytes"] }
 crc = "^1.8"
 byteorder = "^1"
 memmap = "^0.6"
-tensorflow = "^0.13"
-# tch = "^0.0"
 tch = { git = "https://github.com/LaurentMazare/tch-rs.git", branch = "master" }
 glob = "^0.3"
 rayon = "^1.0"

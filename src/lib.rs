@@ -1,7 +1,6 @@
 extern crate protobuf;
 extern crate crc;
 extern crate memmap;
-extern crate tensorflow;
 extern crate tch;
 extern crate glob;
 extern crate rayon;

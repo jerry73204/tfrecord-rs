@@ -10,9 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
 use std::sync::{Mutex, Arc, Once};
 use ndarray::{
-    self,
-    ArrayD, Array1, Array2, Array3, Array4,
-    ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4,
+    self, Array,
+    ArrayD, Array1, Array2, Array3, Array4, Array5,
+    ArrayViewD, ArrayView1, ArrayView2, ArrayView3, ArrayView4, ArrayView5,
     Axis,
 };
 use tch;
@@ -448,7 +448,10 @@ pub fn decode_image_on_example<S>(
             result.insert(name, Box::new(images));
         }
         else {
-            return Err(UnsuportedValueTypeError.into());
+            let err = UnsuportedValueTypeError {
+                key_name: name.to_owned(),
+            };
+            return Err(err.into());
         }
     }
 
@@ -537,6 +540,18 @@ macro_rules! try_convert_arrayview_vec_to_torch (
     )
 );
 
+macro_rules! try_convert_scalar_to_torch (
+    ( $value_ref:ident, $device:ident, $dtype:ty ) => (
+        match $value_ref.downcast_ref::<$dtype>() {
+            None => {}
+            Some(val) => {
+                let tensor: tch::Tensor = (*val).into();
+                return Ok(Box::new(tensor.to_device($device)));
+            }
+        }
+    )
+);
+
 macro_rules! try_convert_vec_to_torch (
     ( $value_ref:ident, $device:ident, $dtype:ty ) => (
         match $value_ref.downcast_ref::<Vec<$dtype>>() {
@@ -580,6 +595,20 @@ fn try_convert_to_tensor(
     //     }
     // })
 
+    match value_ref.downcast_ref::<tch::Tensor>() {
+        None => {}
+        Some(val) => {
+            let tensor = val.shallow_clone();
+            return Ok(Box::new(tensor.to_device(device)));
+        }
+    }
+
+    try_convert_scalar_to_torch!(value_ref, device, u8);
+    try_convert_scalar_to_torch!(value_ref, device, i32);
+    try_convert_scalar_to_torch!(value_ref, device, i64);
+    try_convert_scalar_to_torch!(value_ref, device, f32);
+    try_convert_scalar_to_torch!(value_ref, device, f64);
+
     try_convert_vec_to_torch!(value_ref, device, u8);
     try_convert_vec_to_torch!(value_ref, device, i32);
     try_convert_vec_to_torch!(value_ref, device, i64);
@@ -622,6 +651,12 @@ fn try_convert_to_tensor(
     try_convert_array_to_torch!(value_ref, device, Array4<i32>);
     try_convert_array_to_torch!(value_ref, device, Array4<i64>);
 
+    try_convert_array_to_torch!(value_ref, device, Array5<u8>);
+    try_convert_array_to_torch!(value_ref, device, Array5<f32>);
+    try_convert_array_to_torch!(value_ref, device, Array5<f64>);
+    try_convert_array_to_torch!(value_ref, device, Array5<i32>);
+    try_convert_array_to_torch!(value_ref, device, Array5<i64>);
+
     try_convert_array_vec_to_torch!(value_ref, device, ArrayD<u8>);
     try_convert_array_vec_to_torch!(value_ref, device, ArrayD<f32>);
     try_convert_array_vec_to_torch!(value_ref, device, ArrayD<f64>);
@@ -651,6 +686,12 @@ fn try_convert_to_tensor(
     try_convert_array_vec_to_torch!(value_ref, device, Array4<f64>);
     try_convert_array_vec_to_torch!(value_ref, device, Array4<i32>);
     try_convert_array_vec_to_torch!(value_ref, device, Array4<i64>);
+
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<u8>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<f32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<f64>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<i32>);
+    try_convert_array_vec_to_torch!(value_ref, device, Array5<i64>);
 
     try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<u8>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayViewD<f32>);
@@ -682,6 +723,12 @@ fn try_convert_to_tensor(
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView4<i32>);
     try_convert_arrayview_to_torch!(value_ref, device, ArrayView4<i64>);
 
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<u8>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<f32>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<f64>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<i32>);
+    try_convert_arrayview_to_torch!(value_ref, device, ArrayView5<i64>);
+
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<u8>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<f32>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayViewD<f64>);
@@ -712,7 +759,16 @@ fn try_convert_to_tensor(
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i32>);
     try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView4<i64>);
 
-    Err(UnsuportedValueTypeError.into())
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<u8>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<f32>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<f64>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<i32>);
+    try_convert_arrayview_vec_to_torch!(value_ref, device, ArrayView5<i64>);
+
+    let err = UnsuportedValueTypeError {
+        key_name: name.to_owned(),
+    };
+    Err(err.into())
 }
 
 pub fn example_to_torch_tensor(
@@ -736,6 +792,72 @@ pub fn example_to_torch_tensor(
     Ok(result)
 }
 
+macro_rules! try_make_batch_scalar (
+    ( $name:ident, $features:ident, $dtype:ty ) => (
+        let correct_guess = match $features[0].downcast_ref::<$dtype>() {
+            None => false,
+            Some(_) => true,
+        };
+
+        if correct_guess {
+            let mut scalars = vec![];
+
+            for scalar_ref in $features.drain(..) {
+                match scalar_ref.downcast_ref::<$dtype>() {
+                    None => {
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
+                    },
+                    Some(val) => {
+                        scalars.push(*val);
+                    },
+                };
+            }
+
+            return Ok(Box::new(scalars));
+        }
+    )
+);
+
+macro_rules! try_make_batch_vec (
+    ( $name:ident, $features:ident, $dtype:ty ) => (
+        let (correct_guess, expect_len) = match $features[0].downcast_ref::<Vec<$dtype>>() {
+            None => (false, 0),
+            Some(val) => (true, val.len()),
+        };
+
+        if correct_guess {
+            let mut flat_vec = vec![];
+            let n_vecs = $features.len();
+
+            for mut vec_ref in $features.into_iter() {
+                match vec_ref.downcast_mut::<Vec<$dtype>>() {
+                    None => {
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
+                    },
+                    Some(val) => {
+                        if val.len() != expect_len {
+                            let err = InconsistentValueTypeError {
+                                key_name: $name.to_owned(),
+                            };
+                            return Err(err.into());
+                        }
+                        flat_vec.append(val);
+                    },
+                };
+            }
+
+            let array = Array2::from_shape_vec((n_vecs, expect_len), flat_vec)?;
+            return Ok(Box::new(array));
+        }
+    )
+);
+
 macro_rules! try_make_batch_array (
     ( $name:ident, $features:ident, $dtype:ty ) => (
         let correct_guess = match $features[0].downcast_ref::<$dtype>() {
@@ -749,7 +871,10 @@ macro_rules! try_make_batch_array (
             for array_ref in $features.drain(..) {
                 match array_ref.downcast_ref::<$dtype>() {
                     None => {
-                        return Err(InconsistentValueTypeError.into());
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
                     },
                     Some(array) => {
                         let new_array = array.to_owned().insert_axis(Axis(0));
@@ -781,7 +906,10 @@ macro_rules! try_make_batch_arrayview (
             for array_ref in $features.drain(..) {
                 match array_ref.downcast_ref::<$dtype>() {
                     None => {
-                        return Err(InconsistentValueTypeError.into());
+                        let err = InconsistentValueTypeError {
+                            key_name: $name.to_owned(),
+                        };
+                        return Err(err.into());
                     },
                     Some(array) => {
                         let new_array = array.to_owned().insert_axis(Axis(0));
@@ -801,6 +929,39 @@ macro_rules! try_make_batch_arrayview (
 );
 
 fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<FeatureType> {
+    if features[0].downcast_ref::<tch::Tensor>().is_some() {
+        let mut tensors = vec![];
+
+        for tensor_ref in features.into_iter() {
+            match tensor_ref.downcast_ref::<tch::Tensor>() {
+                None => {
+                    let err = InconsistentValueTypeError {
+                        key_name: name.to_owned(),
+                    };
+                    return Err(err.into());
+                },
+                Some(tensor) => {
+                    tensors.push(tensor.shallow_clone());
+                },
+            };
+        }
+
+        let batch = tch::Tensor::stack(&tensors, 0);
+        return Ok(Box::new(batch));
+    }
+
+    try_make_batch_scalar!(name, features, u8);
+    try_make_batch_scalar!(name, features, f32);
+    try_make_batch_scalar!(name, features, f64);
+    try_make_batch_scalar!(name, features, i32);
+    try_make_batch_scalar!(name, features, i64);
+
+    try_make_batch_vec!(name, features, u8);
+    try_make_batch_vec!(name, features, f32);
+    try_make_batch_vec!(name, features, f64);
+    try_make_batch_vec!(name, features, i32);
+    try_make_batch_vec!(name, features, i64);
+
     try_make_batch_array!(name, features, ArrayD<u8>);
     try_make_batch_array!(name, features, ArrayD<f32>);
     try_make_batch_array!(name, features, ArrayD<f64>);
@@ -830,6 +991,12 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
     try_make_batch_array!(name, features, Array4<f64>);
     try_make_batch_array!(name, features, Array4<i32>);
     try_make_batch_array!(name, features, Array4<i64>);
+
+    try_make_batch_array!(name, features, Array5<u8>);
+    try_make_batch_array!(name, features, Array5<f32>);
+    try_make_batch_array!(name, features, Array5<f64>);
+    try_make_batch_array!(name, features, Array5<i32>);
+    try_make_batch_array!(name, features, Array5<i64>);
 
     try_make_batch_arrayview!(name, features, ArrayViewD<u8>);
     try_make_batch_arrayview!(name, features, ArrayViewD<f32>);
@@ -861,7 +1028,16 @@ fn try_make_batch(name: &str, mut features: Vec<FeatureType>) -> Fallible<Featur
     try_make_batch_arrayview!(name, features, ArrayView4<i32>);
     try_make_batch_arrayview!(name, features, ArrayView4<i64>);
 
-    return Err(UnsuportedValueTypeError.into());
+    try_make_batch_arrayview!(name, features, ArrayView5<u8>);
+    try_make_batch_arrayview!(name, features, ArrayView5<f32>);
+    try_make_batch_arrayview!(name, features, ArrayView5<f64>);
+    try_make_batch_arrayview!(name, features, ArrayView5<i32>);
+    try_make_batch_arrayview!(name, features, ArrayView5<i64>);
+
+    let err = UnsuportedValueTypeError {
+        key_name: name.to_owned(),
+    };
+    Err(err.into())
 }
 
 pub fn make_batch(

@@ -17,12 +17,16 @@ pub struct ItemNotFoundError {
 pub struct UnsuportedImageFormatError;
 
 #[derive(Debug, Fail)]
-#[fail(display = "Unsupported value type")]
-pub struct UnsuportedValueTypeError;
+#[fail(display = "Unsupported value type on key {}", key_name)]
+pub struct UnsuportedValueTypeError {
+    pub key_name: String,
+}
 
 #[derive(Debug, Fail)]
-#[fail(display = "Value type is inconsistent")]
-pub struct InconsistentValueTypeError;
+#[fail(display = "Value type is inconsistent on key {}", key_name)]
+pub struct InconsistentValueTypeError {
+    pub key_name: String,
+}
 
 #[derive(Debug, Fail)]
 #[fail(display = "Checksum mismatched, expect {} but found {}", expect, found)]
