@@ -1,3 +1,5 @@
+**The repository is no longer maintained. Please visit [rust-tfrecord](https://github.com/jerry73204/rust-tfrecord) for alternative.**
+
 # tfrecord-rs
 
 This repository provides TFRecord file reader implemented in Rust. **The project is under development.** Use it with caution.
